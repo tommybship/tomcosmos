@@ -186,6 +186,7 @@ class IntegratorConfig(_StrictModel):
     timestep: Duration | None = None
     divergence_threshold: float | None = Field(default=None, gt=0)
     r_crit_hill: float | None = Field(default=None, gt=0)
+    effects: list[Literal["gr"]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _timestep_matches_integrator(self) -> IntegratorConfig:
@@ -197,6 +198,12 @@ class IntegratorConfig(_StrictModel):
             raise ValueError(
                 "integrator 'ias15' is adaptive; remove 'timestep'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _effects_unique(self) -> IntegratorConfig:
+        if len(self.effects) != len(set(self.effects)):
+            raise ValueError(f"duplicate effects in list: {self.effects}")
         return self
 
 
@@ -230,6 +237,17 @@ class Scenario(_StrictModel):
             raise ValueError(
                 f"duplicate names across bodies/test_particles: {sorted(dupes)}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _gr_requires_sun(self) -> Scenario:
+        if "gr" in self.integrator.effects:
+            body_names = {b.name.lower() for b in self.bodies}
+            if "sun" not in body_names:
+                raise ValueError(
+                    "integrator.effects=['gr'] requires a body named 'sun' "
+                    "(GR 1PN correction treats it as the dominant mass)"
+                )
         return self
 
     @classmethod

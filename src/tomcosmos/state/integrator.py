@@ -13,6 +13,7 @@ from __future__ import annotations
 import rebound
 from astropy import units as u
 
+from tomcosmos.state.effects import attach_gr
 from tomcosmos.state.ic import ResolvedBody, ResolvedTestParticle
 from tomcosmos.state.scenario import IntegratorConfig
 
@@ -86,6 +87,7 @@ def build_simulation(
         sim.testparticle_type = 0
 
     _configure_integrator(sim, integrator_config)
+    _apply_effects(sim, integrator_config)
     sim.move_to_com()
     return sim
 
@@ -102,3 +104,18 @@ def _configure_integrator(sim: rebound.Simulation, cfg: IntegratorConfig) -> Non
 
     if cfg.name == "mercurius" and cfg.r_crit_hill is not None:
         sim.ri_mercurius.r_crit_hill = float(cfg.r_crit_hill)
+
+
+def _apply_effects(sim: rebound.Simulation, cfg: IntegratorConfig) -> None:
+    """Attach optional physics effects (GR, etc.) after the particles are in.
+
+    Callbacks are stashed on the sim as a hidden attribute so they stay
+    alive for as long as the simulation does — REBOUND's C side holds only
+    a CFUNCTYPE pointer.
+    """
+    if not cfg.effects:
+        return
+    callbacks: list[object] = []
+    if "gr" in cfg.effects:
+        callbacks.append(attach_gr(sim, sun_hash=rebound.hash("sun").value))
+    sim._tomcosmos_effect_callbacks = callbacks
