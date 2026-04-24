@@ -1,5 +1,11 @@
 # Ephemeris kernels (large binary files, downloaded on demand)
 data/kernels/
+# skyfield drops its default-loader downloads in cwd; catch strays.
+/*.bsp
+/*.bpc
+/*.tf
+/*.tls
+/*.tpc
 
 # Simulation outputs
 runs/
