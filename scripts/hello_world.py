@@ -1,11 +1,21 @@
-"""Sanity check: print Earth's heliocentric position at current time using skyfield."""
-from skyfield.api import load
+"""Sanity check: print Earth's heliocentric position at current time using skyfield.
+
+Loads the DE440s kernel from `tomcosmos.config.kernel_dir()`
+(default `./data/kernels`; override with TOMCOSMOS_KERNEL_DIR). If the
+kernel isn't there yet, skyfield will download it on first run.
+"""
+from skyfield.api import Loader
+
+from tomcosmos.config import kernel_dir
 
 
 def main() -> None:
-    ts = load.timescale()
+    d = kernel_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    loader = Loader(str(d))
+    ts = loader.timescale()
     t = ts.now()
-    planets = load("de440s.bsp")
+    planets = loader("de440s.bsp")
     earth = planets["earth"]
     sun = planets["sun"]
 
@@ -16,6 +26,7 @@ def main() -> None:
     print(f"  y = {y:+.3e} km")
     print(f"  z = {z:+.3e} km")
     print(f"  |r| = {(x**2 + y**2 + z**2) ** 0.5:.3e} km")
+    print(f"(kernel: {d / 'de440s.bsp'})")
 
 
 if __name__ == "__main__":
