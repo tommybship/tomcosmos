@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: tomcosmos
+          miniforge-version: latest
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type-check (state only)
+        run: mypy src/tomcosmos/state
+        continue-on-error: true
+
+      - name: Tests
+        run: pytest -n auto -m "not ephemeris and not viewer"

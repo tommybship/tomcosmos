@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tomcosmos"
+version = "0.0.1"
+description = "Solar system state simulator."
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Tommy Blankinship" }]
+dependencies = [
+    "numpy>=1.26,<3",
+    "scipy>=1.11,<2",
+    "rebound>=4,<5",
+    "astropy>=6,<8",
+    "skyfield>=1.48,<2",
+    "spiceypy>=6,<8",
+    "astroquery>=0.4.6",
+    "pydantic>=2.5,<3",
+    "pyyaml>=6.0,<7",
+    "typer>=0.12,<1",
+    "structlog>=24,<26",
+    "pyarrow>=15,<20",
+    "pandas>=2.2,<3",
+    "pyvista>=0.43,<1",
+    "trame>=3.5,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-xdist>=3.5,<4",
+    "pytest-mpl>=0.17,<1",
+    "mypy>=1.10",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+tomcosmos = "tomcosmos.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tomcosmos"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+
+[[tool.mypy.overrides]]
+module = "tomcosmos.state.*"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "physics: physics-invariant tests (medium speed)",
+    "ephemeris: ephemeris-agreement tests (slow, network/kernel access)",
+    "viewer: viewer snapshot tests (require display or offscreen GL)",
+]
+addopts = "-ra --strict-markers"
