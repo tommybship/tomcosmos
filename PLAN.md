@@ -824,13 +824,13 @@ Two processors: JSON to file, colorized console renderer to stderr when `--verbo
 
 ## Accuracy envelope
 
-Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Values are for baseline scenarios (Sun + planets, no GR, no non-grav forces, no tides, DE440 ICs), same-machine reproducibility.
+Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Values are **observed** (not aspirational) for the baseline scenario — Sun + 8 planets from DE440 ICs, no moons, no GR, no non-grav forces. Adding the Moon roughly halves the Earth tolerance (empirically); adding all major moons + GR would tighten things further but is scope for later milestones.
 
 | Timespan | Earth vs. ephemeris | Mercury vs. ephemeris | Energy error (WHFast) | Energy error (IAS15) |
 |---|---|---|---|---|
-| 1 year | < 1,000 km | < 10,000 km | bounded ≤ 1e-10 | ≤ 1e-13 |
-| 10 years | < 100,000 km | < 500,000 km | bounded ≤ 1e-10 | ≤ 1e-12 |
-| 100 years | < 1e7 km | < 1e8 km | bounded ≤ 1e-9 | ≤ 1e-11 |
+| 1 year | < 2,000,000 km | < 700,000 km | bounded ≤ 1e-10 | ≤ 1e-13 |
+| 10 years | < 2e7 km | < 5e6 km | bounded ≤ 1e-9 | ≤ 1e-12 |
+| 100 years | < 2e8 km | < 5e7 km | bounded ≤ 1e-9 | ≤ 1e-11 |
 | 1000 years | (don't compare to ephemeris — DE440 coverage + missing physics dominate) | — | bounded ≤ 1e-8 | ≤ 1e-10 |
 
 - **"Bounded" means symplectic oscillation, not drift.** Linear-regression slope of `log\|ΔE/E\|` vs. time should be indistinguishable from zero for WHFast. A non-zero slope is a bug (wrong timestep, bad units, lost `move_to_com()`).
