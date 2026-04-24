@@ -4,21 +4,22 @@
 1. [Context](#context)
 2. [Non-goals](#non-goals)
 3. [Project location and layout](#project-location-and-layout)
-3. [Design conventions](#design-conventions)
-4. [Dependency plan](#dependency-plan) — `environment.yml` + `pyproject.toml` sketches
-5. [GitHub integration](#github-integration)
-6. [Architecture (three decoupled layers)](#architecture-three-decoupled-layers)
-7. [Iterative milestones](#iterative-milestones-each-runnable-end-to-end) — M0 → M6 with exit criteria
-8. [Developer workflow + CLI](#developer-workflow--cli) — including `run()` orchestration flow
-9. [Testing strategy](#testing-strategy)
-10. [Special IC computation](#special-ic-computation) — Lagrange, Keplerian, explicit
-11. [Reproducibility + diagnostics](#reproducibility--diagnostics)
-12. [Critical files](#critical-files-rough-layout-when-building)
-13. [Reuse](#reuse--do-not-build-these-yourself)
-14. [Verification](#verification)
-15. [Operational behaviors](#operational-behaviors) — close encounters, divergence, checkpointing, perf targets, error handling
-16. [Open questions for later](#open-questions-for-later-not-blocking)
-17. [Glossary](#glossary)
+4. [Design conventions](#design-conventions)
+5. [Dependency plan](#dependency-plan) — `environment.yml` + `pyproject.toml` sketches
+6. [GitHub integration](#github-integration)
+7. [Architecture (three decoupled layers)](#architecture-three-decoupled-layers)
+8. [Iterative milestones](#iterative-milestones-each-runnable-end-to-end) — M0 → M6 with exit criteria
+9. [Developer workflow + CLI](#developer-workflow--cli) — including `run()` orchestration flow
+10. [Testing strategy](#testing-strategy)
+11. [Special IC computation](#special-ic-computation) — Lagrange, Keplerian, explicit
+12. [Reproducibility + diagnostics](#reproducibility--diagnostics)
+13. [Accuracy envelope](#accuracy-envelope) — consolidated expectations and test tolerances
+14. [Critical files](#critical-files-rough-layout-when-building)
+15. [Reuse](#reuse--do-not-build-these-yourself)
+16. [Verification](#verification)
+17. [Operational behaviors](#operational-behaviors) — close encounters, divergence, checkpointing, perf targets, error handling
+18. [Open questions for later](#open-questions-for-later-not-blocking)
+19. [Glossary](#glossary)
 
 ## Context
 Build a Python-based solar system simulator with **learning-grade accuracy** — tight enough that the physics reads clearly (Lagrange points emerge naturally from N-body rather than sphere-of-influence approximations; Kepler's third law recoverable from measured periods; energy bounded under symplectic integration), but explicitly not mission-planning-grade. See Non-goals for what we're deliberately leaving out. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while having something that feels like a real tool. Shareability matters; packaging later is acceptable.
@@ -32,6 +33,7 @@ Pinning these explicitly so scope doesn't creep across milestones:
 - **Actual mission design.** No Lambert solvers, trajectory optimization, or targeting. M4 "spacecraft" scenarios are for visualizing maneuvers, not planning them.
 - **Byte-identical cross-platform reproducibility.** Floating-point associativity under different BLAS/CPU combinations makes this intractable. Same-machine reruns agreeing to ~1e-10 is the bar.
 - **Launch / atmospheric phase.** M4 probes start already in heliocentric orbit; we don't model ascent, Earth-departure maneuvers relative to Earth's rotating frame, or anything requiring geocentric sub-day timesteps.
+- **GM vs. `G × m` precision.** Real mission tools use the JPL gravitational parameter `GM` directly (known to ~10 digits), because the gravitational constant `G` alone is known to only ~4 digits. We use `m` from `constants.py` and let REBOUND multiply by its `G`. This caps practical accuracy at ~1e-4 relative, which is the real source of the "learning-grade" label — revisit only if a milestone needs it.
 
 ## Project location and layout
 - **On disk**: `C:\git\tommybship\tomcosmos` — all paths in this plan are relative to this directory.
@@ -64,7 +66,7 @@ C:\git\tommybship\tomcosmos\
 │       │   ├── __init__.py
 │       │   ├── history.py     # StateHistory, Parquet read/write with embedded metadata
 │       │   └── diagnostics.py # structlog setup, run-metadata capture
-│       ├── analysis/       # post-hoc helpers on top of StateHistory
+│       ├── analysis/       # post-hoc helpers on top of StateHistory (see Analysis API)
 │       │   ├── __init__.py
 │       │   ├── orbital_elements.py  # osculating elements from state vectors
 │       │   ├── encounters.py        # close-approach detection
@@ -123,6 +125,29 @@ Don't pre-emptively ABC things with one implementation ("what if we swap integra
 - `io/` knows about `StateHistory` and `Scenario`; nothing above it.
 
 This keeps the dependency graph acyclic and makes the physics unit-testable without pyvista or Parquet in the loop.
+
+### Analysis API (sketch)
+Pure functions over `StateHistory`; each returns a DataFrame or scalar so callers can chain with pandas/plotting. No new stateful objects.
+
+```python
+# analysis/orbital_elements.py
+def osculating_elements(hist: StateHistory, body: str, central_body: str = "Sun") -> pd.DataFrame
+    # returns columns: sample_idx, t_tdb, a, e, i, raan, argp, nu
+
+# analysis/encounters.py
+def close_approaches(hist: StateHistory, body_a: str, body_b: str, threshold_km: float) -> pd.DataFrame
+    # returns columns: t_tdb, distance_km, v_rel_kms; one row per local min under threshold
+def hill_crossings(hist: StateHistory, particle: str, body: str) -> pd.DataFrame
+    # reads the event log; convenience wrapper
+
+# analysis/metrics.py
+def energy_trace(hist: StateHistory) -> pd.Series         # relative energy error vs time
+def angular_momentum_trace(hist: StateHistory) -> pd.Series
+def orbital_period(hist: StateHistory, body: str, central_body: str = "Sun") -> float  # seconds
+def period_from_crossings(hist: StateHistory, body: str, axis: str = "x") -> float     # zero-crossing method
+```
+
+Each is a thin calculation on the long-format DataFrame — no I/O, no viewer coupling. Unit-testable with hand-built `StateHistory` instances containing 3-4 samples.
 
 ## Dependency plan
 
@@ -269,6 +294,11 @@ module = "tomcosmos.state.*"
 strict = true
 warn_return_any = false
 
+# untyped C-extension scientific deps — stubs don't exist, ignore missing imports:
+[[tool.mypy.overrides]]
+module = ["rebound.*", "spiceypy.*", "skyfield.*", "pyvista.*", "vtk.*", "trame.*", "astroquery.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -347,6 +377,7 @@ REBOUND provides three integrators we'll use. The rule of thumb: timestep ≤ ~5
 
 **Operational guidance**
 - **Log energy error every output cadence.** Persist it in the state-history file. Drift = wrong timestep or wrong integrator; oscillation = normal.
+- **Output cadence vs. timestep.** For WHFast (fixed step), if `output_cadence` isn't a whole multiple of `timestep`, REBOUND has to take a partial step at the end to hit the sample time — which technically breaks symplecticity for that step. Three options: (a) choose cadence as an integer multiple of timestep (recommended — e.g., step=1 day, cadence=1 day or 10 day); (b) set `sim.integrator = "whfast"` with `safe_mode = 0` to avoid automatic symplectic corrector toggles, then accept the small end-step error; (c) use `sim.integrate(t, exact_finish_time=False)` and live with cadence jitter of up to one timestep. Default: enforce (a) at scenario-validation time with a warning if the ratio isn't integer.
 - **Validate M1 against ephemeris.** After 1 year of WHFast, Earth should match skyfield/SPICE to <1000 km. After 100 years, drift of 10s of thousands of km is expected (you're not modeling GR, asteroid-belt perturbations, or tides) — that's physics, not a bug.
 - **Never switch integrators mid-run** silently. If a scenario forces a switch (e.g., spacecraft added), the scenario file should name MERCURIUS explicitly.
 - **WHFast requires heliocentric (or Jacobi) coordinates internally** but REBOUND handles this automatically; you feed barycentric state vectors, REBOUND converts on `sim.integrate()`.
@@ -359,7 +390,14 @@ REBOUND provides three integrators we'll use. The rule of thumb: timestep ≤ ~5
   - `TestParticle { name, ic: { type: explicit|lagrange|keplerian, ... } }`
   - `IntegratorConfig { name: whfast|ias15|mercurius, timestep?, divergence_threshold?, r_crit_hill? }` — `timestep` required for fixed-step integrators, omitted for adaptive. `divergence_threshold` defaults per-integrator (see Operational behaviors).
   - `OutputConfig { format: parquet, cadence, path?, checkpoint?: bool }` — `path` optional; if omitted, defaults to `runs/<scenario_name>__<run_started_utc>.parquet` (see Output paths below).
-  - `Scenario { name, epoch, duration, integrator, bodies, test_particles?, output }`
+  - `Scenario { schema_version, name, epoch, duration, integrator, bodies, test_particles?, output }`
+
+#### Schema versioning
+- Every scenario YAML has a required top-level `schema_version: N` (integer, starts at `1`). Pydantic validates it and rejects unknown versions with a clear error.
+- **Bump rules**: additive fields (new optional keys, new enum values) keep the existing `schema_version`. Renames, removed fields, or changed semantics bump it. The plan itself captures whichever version is current in the Glossary.
+- **Migration path**: `src/tomcosmos/state/scenario_migrations.py` holds pure functions `migrate_v1_to_v2(raw_dict) -> raw_dict` etc. `Scenario.from_yaml` runs migrations in order if the file's version is older than current, then validates against the current model. Always emit a warning naming which migrations ran so users know their file was upgraded (they can commit the migrated version).
+- **Run metadata records both** `schema_version_at_run` (what the file declared) and `schema_version_current` (what code expected). Re-runs from metadata use the original; this means old runs stay reproducible even after schema evolves.
+- Scenarios committed to `scenarios/` are always at current version — a pre-commit hook (later) or CI test asserts this.
 
 #### Output paths and overwrite behavior
 - **Default path is timestamped** (`runs/<scenario_name>__<utc_iso_basic>.parquet`, e.g. `runs/sun-planets-baseline__20260424T153000Z.parquet`). Two runs of the same scenario don't silently clobber each other.
@@ -428,7 +466,7 @@ Long format, one row per (time × body). Pandas/pyarrow friendly, slices cleanly
 | Column | Type | Units | Notes |
 |---|---|---|---|
 | `sample_idx` | `int64` | — | 0-indexed sample number; monotonically increasing. Primary key with `body` |
-| `t_tdb` | `float64` | seconds from epoch | Simulation time. Epoch itself lives in file metadata, not rows |
+| `t_tdb` | `float64` | seconds from epoch | Simulation time. Epoch itself lives in file metadata, not rows. float64 at 100 yr (~3e9 s) resolves to ~µs — plenty for anything short of ranging-grade work |
 | `body` | `string` (dict-encoded) | — | Body name; dict-encoded in Parquet for compactness |
 | `x`, `y`, `z` | `float64` | km | Position in ICRF, SSB-origin |
 | `vx`, `vy`, `vz` | `float64` | km/s | Velocity in ICRF |
@@ -447,8 +485,15 @@ File metadata (Parquet key/value, not per-row):
 
 Energy-error diagnostics live in the `energy_rel_err` column only — not also as a file-metadata array. Parquet's run-length encoding makes the repeated-across-bodies values essentially free, and keeping it columnar means `pandas.read_parquet(...).groupby("sample_idx").energy_rel_err.first()` is the canonical query. One source of truth.
 
-Event log (separate Parquet file, `runs/<name>.events.parquet`):
-- Rows: `(t_tdb, kind, particle, body?, detail)`. `kind` ∈ `{delta_v, hill_enter, hill_exit, impact, divergence}`. Keeps the main state history dense and typed.
+Event log (separate Parquet file, `runs/<basename>.events.parquet`):
+- Rows: `(t_tdb, kind, particle, body?, detail)`. `kind` ∈ `{delta_v, hill_enter, hill_exit, impact, divergence, checkpoint}`. Keeps the main state history dense and typed.
+- `detail` is a **JSON-encoded string** column holding kind-specific fields. Canonical shapes:
+  - `delta_v` → `{"dv_kms": [vx, vy, vz], "frame": "body"|"icrf"}`
+  - `hill_enter` / `hill_exit` → `{"r_hill_km": <float>, "closest_approach_km": <float>, "v_rel_kms": <float>}`
+  - `impact` → `{"v_rel_kms": <float>, "r_impactor_km": <float>}`
+  - `divergence` → `{"energy_rel_err": <float>, "threshold": <float>}`
+  - `checkpoint` → `{"checkpoint_path": <str>, "sample_idx": <int>}`
+- JSON (vs one column per field) because the kinds are heterogeneous and rare; Parquet's string compression makes the overhead negligible. Typed columns return when a given kind becomes hot enough to justify a dedicated schema.
 
 ### 3. Visualization layer — pyvista now, trame for web later
 - **`pyvista`** desktop 3D viewer reads state history, renders bodies with orbit trails, supports time scrubbing and camera targeting. **`pyvista` + `trame`** exposes the same scene as a web app — "share it" and "package it" without porting to three.js.
@@ -561,6 +606,27 @@ history.viewer().show()                           # pyvista
 
 `StateHistory` exposes pandas/polars DataFrames for arbitrary analysis — energy traces, distance between bodies, encounter detection — without forcing the user through the CLI.
 
+### Public API surface (pinned in `__init__.py`)
+`src/tomcosmos/__init__.py` re-exports exactly this set; nothing else is considered stable:
+- **Types**: `Scenario`, `Body`, `TestParticle`, `IntegratorConfig`, `OutputConfig`, `StateHistory`, `RunMetadata`.
+- **Functions**: `run(scenario)`, `load_run(path)`, `validate(scenario)` (preflight from library code, same as the CLI's `validate`).
+- **Exceptions**: `ScenarioValidationError`, `EphemerisCoverageError`, `IntegratorDivergedError`, `UnknownBodyError`, `DirtyWorkingTreeError`, `KernelDriftError`.
+
+Private things (`state/integrator.Integrator`, `io/history.StateHistoryWriter`, anything under `viz/scene.py`) aren't re-exported. Users reach for them only via full import paths, which signals "you're off the stable surface." Version 0.x makes no compatibility promises — semver starts at 1.0.0, which we hit no earlier than M6.
+
+### Environment variables
+The library reads these with precedence `CLI flag > env var > default`:
+- `TOMCOSMOS_KERNEL_DIR` — where `fetch-kernels` writes and the loader reads. Default: `./data/kernels` relative to cwd.
+- `TOMCOSMOS_RUNS_DIR` — where `run` writes outputs when `output.path` is relative. Default: `./runs`.
+- `TOMCOSMOS_LOG_LEVEL` — default log level (`debug`/`info`/`warning`). CLI `--verbose` forces `debug`.
+- `TOMCOSMOS_CACHE_DIR` — skyfield/astroquery cache. Default: platform-standard (`~/.cache/tomcosmos` on Linux, `%LOCALAPPDATA%\tomcosmos\Cache` on Windows).
+
+Tests rely on `monkeypatch.setenv()` to redirect these (see conftest patterns); no test should touch real `~/.cache` or `./runs`.
+
+### CLI exit codes and progress
+- **Exit codes**: `0` success; `2` scenario validation or preflight failure; `3` ephemeris or kernel error; `4` integrator divergence; `5` I/O error; `1` reserved for unexpected exceptions. CI can key on these.
+- **Progress**: `run` shows a rich progress bar (typer's `rich` integration) when stdout is a TTY — percentage by sim-time, ETA from wall-clock rate, current `|ΔE/E|`. Auto-suppressed when stdout isn't a TTY (CI, log-to-file) so structured logs stay machine-parseable. `--no-progress` forces it off.
+
 ### `run()` orchestration flow
 The core function that turns a `Scenario` into a `StateHistory` on disk. Roughly:
 
@@ -615,8 +681,11 @@ Three tiers, all under `pytest`. Run `pytest -n auto` for parallelism (via `pyte
 - **Frame conversions** round-trip: `icrf → ecliptic → icrf` is identity to machine precision.
 - **Unit handling**: `parse_duration("10 yr")` → `10 * u.year`; reject bad inputs.
 - **Scenario schema**: Pydantic validation accepts known-good fixtures, rejects known-bad ones (missing SPICE id, conflicting `source` and explicit state, etc.).
+- **Scenario fixtures in `scenarios/` all load** — parametrized over the directory; each must pass `Scenario.from_yaml` + IC dry-run.
+- **Schema migrations are reversible and ordered**: given a v1 fixture, `migrate_v1_to_v2(migrate_v2_to_v1(x)) == x` for the fields both versions share (catches migration bugs before they ship).
 - **Lagrange IC math** (see below): L4 position for Sun-Earth matches closed-form to 1 km.
 - **Kepler-equation solver** round-trip: orbital elements → state → elements reproduces inputs.
+- **SBDB epoch propagation**: Kepler-propagate elements by Δt, compare to two-body direct integration — agreement at 1e-10 relative.
 
 ### Tier 2 — physics invariants (medium, marked `@pytest.mark.physics`)
 - **Energy conservation (WHFast)**: integrate Sun+Jupiter for 1000 years, 1-day step. Assert `|ΔE/E|` bounded below 1e-10 and non-drifting (linear regression slope near zero).
@@ -626,19 +695,28 @@ Three tiers, all under `pytest`. Run `pytest -n auto` for parallelism (via `pyte
 
 ### Tier 3 — ephemeris agreement (slow, marked `@pytest.mark.ephemeris`)
 - Propagate REBOUND from ephemeris ICs; compare to ephemeris lookup at future epochs.
-- Tolerance envelope degrades with time (physics, not bug):
-  - 1 year: <1000 km for Earth, <10,000 km for Mercury.
-  - 10 years: <100,000 km for Earth.
-  - 100 years: <10,000,000 km for Earth (loose — no GR, no tides, no asteroid-belt perturbations).
+- Tolerances come from the [Accuracy envelope](#accuracy-envelope) table — tests import the table as test parameters rather than hard-coding numbers, so widening/tightening the envelope happens in one place.
 - Run weekly or on release, not on every commit.
 
 ### Viewer snapshot tests
-- Render a known scenario, compare output image to a committed baseline using `pytest-mpl` or `pyvista.Plotter.screenshot` + image diff. Catches regressions in the viz code without requiring humans to eyeball everything. Marked `@pytest.mark.viewer`, skippable on headless CI.
+- Render a known scenario, compare output image to a committed baseline using `pytest-mpl` or `pyvista.Plotter.screenshot` + image diff. Catches regressions in the viz code without requiring humans to eyeball everything. Marked `@pytest.mark.viewer`.
+- **Running headless**: pyvista has first-class offscreen mode via `pv.start_xvfb()` on Linux (requires `xvfb` apt package) or `pyvista.OFF_SCREEN = True` which uses VTK's offscreen OSMesa/EGL pathway. CI runs viewer tests on Linux only with `apt-get install -y xvfb` + `pv.start_xvfb()` in a session-scoped fixture.
+- **Baseline images** live in `tests/fixtures/viewer_baselines/` with filenames matching the test ID. First-run creates baselines manually (reviewed by eye); regressions are flagged as diffs above a per-image tolerance (`rtol=0.02` on normalized pixel difference to forgive minor anti-aliasing drift across VTK versions).
+- **When baselines change legitimately** (intentional viz tweak), regenerate with `pytest --mpl-generate-path=tests/fixtures/viewer_baselines` and commit the new PNGs — the diff in the PR makes the visual change reviewable.
+- Skippable via `-m "not viewer"`; CI does this automatically on Windows and when `xvfb` isn't available.
 
 ### Fixtures
 - `tests/fixtures/scenarios/` — known-good and known-bad YAMLs.
 - `tests/fixtures/expected/` — expected state vectors (small CSVs) for canonical runs.
 - Ephemeris/kernel dependence: tests either mock `ephemeris.query()` or use a tiny bundled ephemeris subset (`de440s.bsp`, ~32 MB, commits cleanly).
+
+### `conftest.py` patterns
+- **Top-level `tests/conftest.py`** — shared fixtures for the whole suite.
+- `@pytest.fixture(scope="session") spice_source()` — loads `de440s.bsp` once per pytest invocation (reload per-test is >1 s each, death by a thousand cuts).
+- `@pytest.fixture(scope="session") skyfield_source()` — same for skyfield's `de440s.bsp`.
+- `@pytest.fixture tmp_runs_dir(tmp_path, monkeypatch)` — redirects `TOMCOSMOS_RUNS_DIR` to a per-test tmp path; every test that writes a run gets isolated output.
+- `@pytest.fixture baseline_scenario(spice_source)` — returns a parsed `Scenario` for Sun+8 planets at a fixed epoch; reused across physics-invariant tests.
+- **Every scenario in `scenarios/`** gets a parametrized Tier-1 smoke test in `tests/test_scenario_fixtures.py`: loads, validates, dry-runs the IC-resolution step. Catches silent scenario rot when the schema evolves without migrations being written.
 
 ## Special IC computation
 
@@ -707,6 +785,7 @@ Parquet supports key/value metadata on the file and per column. Every run embeds
 - `git_sha` — commit of the `tomcosmos` package at run time (captured via `git rev-parse HEAD`; fail the run if the working tree is dirty and `--allow-dirty` isn't passed).
 - `rebound_version`, `astropy_version`, `python_version`, `platform`.
 - `kernel_hashes` — SHA256 of each SPICE kernel used (catches silent kernel swaps).
+- `kernel_versions` — human-readable version/release strings where available (e.g., `"DE440"`, `"jup365"`), extracted from the kernel's COMMENT area on load. The SHA is authoritative; the version is for humans reading `tomcosmos info`.
 - `start_wallclock`, `end_wallclock`, `wallclock_seconds`.
 - (energy-error series is *not* embedded as metadata — it lives in the `energy_rel_err` column, see StateHistory schema above.)
 
@@ -716,11 +795,50 @@ Parquet supports key/value metadata on the file and per column. Every run embeds
 ### Logging
 - `structlog` for structured JSON logs.
 - Every sim run logs at minimum: start (scenario name, epoch, duration), integrator setup, checkpoints every `output_cadence` with `|ΔE/E|` and wall-clock rate, end (success/fail, summary).
-- Default: log to `runs/<name>.log` alongside the Parquet. `--log-file -` for stderr.
+- Default: log to `runs/<basename>.log` alongside the Parquet. `--log-file -` for stderr.
+
+#### Canonical log-event fields
+Every log event carries these keys (omitted when not applicable). Pinned so `jq` queries across runs are reliable:
+- `ts` — ISO 8601 UTC wall-clock timestamp of the log line (`structlog.processors.TimeStamper(fmt="iso", utc=True)`).
+- `level` — `debug`/`info`/`warning`/`error`.
+- `event` — short slug: `run.start`, `integrator.setup`, `sample.written`, `event.delta_v`, `event.hill_enter`, `run.checkpoint`, `run.diverged`, `run.end`.
+- `run_id` — UUID4 generated at `run()` entry; identical across all lines of a given run. Correlator for multi-run analysis.
+- `scenario` — scenario name (not path).
+- `sim_time_s` — simulation time, seconds from epoch, when the event describes integrator state.
+- `wallclock_s` — wall-clock seconds since `run.start`, for perf profiling via the log.
+- `energy_rel_err` — on sample-write events.
+- `body` / `particle` — on event-log entries.
+- `detail` — structured dict for kind-specific fields (mirrors the event-log `detail` shape).
+
+Two processors: JSON to file, colorized console renderer to stderr when `--verbose`. The JSON lines file is the authoritative record; the console is for humans watching a run.
 
 ### Determinism rules
 - No wall-clock seeding — any randomness (e.g., sampling small-body populations in M5) takes an explicit seed from the scenario YAML.
 - REBOUND with fixed timestep is deterministic on a given machine/BLAS. Document that cross-platform byte-identical output is **not** a goal (floating-point associativity makes it intractable); instead, numerical agreement to ~1e-10 is the standard.
+
+### Kernel locking
+- `scripts/fetch_kernels.py` writes a `data/kernels/manifest.json` recording `{filename, url, sha256, downloaded_at}` for every kernel fetched. Committed to git (kernels themselves stay gitignored).
+- On every run, the loader verifies each required kernel's SHA against the manifest and refuses to start on mismatch (overrideable with `--allow-kernel-drift`). This catches the case where a silent NAIF update changes ephemeris output between dev and CI.
+- `fetch-kernels --refresh` re-downloads and updates the manifest in one step — the only path to a new SHA.
+- A kernel's version string (DE440, jup365, ...) is captured alongside its hash in run metadata for human-readable diagnostics.
+
+## Accuracy envelope
+
+Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Values are for baseline scenarios (Sun + planets, no GR, no non-grav forces, no tides, DE440 ICs), same-machine reproducibility.
+
+| Timespan | Earth vs. ephemeris | Mercury vs. ephemeris | Energy error (WHFast) | Energy error (IAS15) |
+|---|---|---|---|---|
+| 1 year | < 1,000 km | < 10,000 km | bounded ≤ 1e-10 | ≤ 1e-13 |
+| 10 years | < 100,000 km | < 500,000 km | bounded ≤ 1e-10 | ≤ 1e-12 |
+| 100 years | < 1e7 km | < 1e8 km | bounded ≤ 1e-9 | ≤ 1e-11 |
+| 1000 years | (don't compare to ephemeris — DE440 coverage + missing physics dominate) | — | bounded ≤ 1e-8 | ≤ 1e-10 |
+
+- **"Bounded" means symplectic oscillation, not drift.** Linear-regression slope of `log\|ΔE/E\|` vs. time should be indistinguishable from zero for WHFast. A non-zero slope is a bug (wrong timestep, bad units, lost `move_to_com()`).
+- **Practical precision ceiling is ~1e-4 relative** because we use mass × G rather than GM (see Non-goals). The envelope above is dominated by that, not by integration error — which is why IAS15 at machine precision per step doesn't buy us real-world accuracy beyond what WHFast delivers.
+- **Kepler's third law** (M1 physics test): measured period from zero-crossings should match `2π√(a³/GM_sun)` to within 1e-3 relative for all 8 planets over 100 years. Wider tolerance than you might expect because osculating `a` drifts under mutual perturbation.
+- **Lagrange libration bound (M3)**: Sun-Earth L4 test particle stays within ±10° of equilibrium angle in the rotating frame for ≥10 years. Escape (unbounded drift past 60° of deviation) is the failure mode.
+
+Test tolerances (Tier 3) use this table directly. If a target tightens below what's listed, the physics model needs to grow (GR, tides, asteroid belt) — not the integrator.
 
 ## Critical files (rough layout when building)
 - `scenarios/*.yaml` — scenario configs
@@ -765,6 +883,7 @@ Applies to M3+. A test particle that enters a planet's Hill sphere could be anyt
 - **Impact criterion**: `distance < body.radius_km`. On impact, the particle is marked "terminated" in the state history (NaN for subsequent samples), event logged, sim continues without it. Never silently delete — preserving the trail is important for analysis.
 - **Opt-in stricter behavior** per scenario: `events: { on_impact: halt }` stops the sim entirely; `on_impact: reject_scenario` (pre-run) disallows IC that would impact within the duration.
 - Implementation: REBOUND's `sim.collision = "direct"` + a custom `collision_resolve` callback that writes to the event log and either removes or halts.
+- **M5 scaling caveat**: `collision = "direct"` is O(N²) per step; with 10k test particles this dominates. For M5, disable test-particle collision entirely (`testparticle_type = 0` already prevents their mutual gravity) and only check collisions against massive bodies — via a heartbeat callback that iterates test particles and tests distance-to-body directly. Or switch to `collision = "tree"` / `"line"` if the overhead is acceptable. Impact checks against planets are inherently N_test × N_massive, which is linear in N_test and fine.
 
 ### Integrator divergence detection
 - On every output cadence, check `|ΔE/E|` against a scenario-configured threshold. **Default by integrator:** WHFast `1e-8`, IAS15 `1e-10`, MERCURIUS `1e-8`. `scenario.integrator.divergence_threshold` overrides. Per-integrator defaults because IAS15's per-step target is machine-precision — a 1e-8 bar on IAS15 would miss real blowup.
