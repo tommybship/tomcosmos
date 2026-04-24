@@ -62,7 +62,18 @@ The surface exported from `tomcosmos` is pinned; anything not re-exported there 
 
 ## Accuracy notes
 
-This is a **learning-grade** simulator, not a mission-planning tool. It doesn't model GR, non-gravitational forces, tides, or planetary rotation (see [PLAN.md > Non-goals](PLAN.md#non-goals)). The practical ceiling is ~1e-4 relative because we use `G × mass` rather than JPL's `GM`.
+This simulator is learning-grade today and tightening. It doesn't yet model non-gravitational forces, tides, or planetary rotation (see [PLAN.md > Non-goals](PLAN.md#non-goals) for what's permanent and what's roadmap). The practical ceiling is ~1e-4 relative because we use `G × mass` rather than JPL's `GM` — M3 fixes that.
+
+General-relativistic (1PN) corrections ship as an opt-in scenario flag:
+
+```yaml
+integrator:
+  name: whfast
+  timestep: "0.1 day"
+  effects: [gr]
+```
+
+When [REBOUNDx](https://github.com/dtamayo/reboundx) is installed, tomcosmos uses its `gr` force; otherwise a cross-validated Python 1PN implementation runs instead. Install REBOUNDx via `pip install 'tomcosmos[reboundx]'` on Linux/macOS; on Windows, install from [our patched fork](https://github.com/tommybship/reboundx/tree/windows-msvc-build) until the fix merges upstream (REBOUNDx's C source uses features MSVC doesn't accept — we track this in [dtamayo/reboundx#137](https://github.com/dtamayo/reboundx/issues/137)).
 
 Measured envelope (same-machine reproducibility, baseline sun-planets scenario):
 

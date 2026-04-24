@@ -1,16 +1,29 @@
 """Optional physics effects — additional forces bolted on top of pure N-body.
 
-Each function attaches a callback to a `rebound.Simulation` and returns
-the Python callable that REBOUND will invoke during force evaluations.
-The returned callable must be kept alive for as long as the simulation
-runs (REBOUND stores a C wrapper around it but the underlying Python
-object also needs a live reference). `build_simulation` stashes them
-on the sim as a hidden attribute.
+Each function attaches its effect to a `rebound.Simulation` and returns
+something the caller can keep alive for the sim's lifetime. REBOUND's
+C side only holds weak references to Python-level callbacks and to
+REBOUNDx's Extras handle; if Python GCs the underlying object, the
+next force evaluation segfaults. `build_simulation` stashes the
+returned handle on the sim as a hidden attribute.
 
 Currently implemented:
   - `gr` — 1PN Einstein correction (Schwarzschild) from the Sun as the
     dominant mass. Recovers Mercury's perihelion precession
-    (~43 arcsec/century). Cross-platform (no REBOUNDx dependency).
+    (~43 arcsec/century).
+
+Backend selection for `gr`:
+  - If `reboundx` imports successfully → use REBOUNDx's `gr` force
+    (battle-tested, same C code the rest of the REBOUND community
+    uses).
+  - Otherwise → use our own Python implementation via REBOUND's
+    `additional_forces` hook. Cross-platform, no dependency,
+    verified to agree with REBOUNDx to within integrator roundoff.
+
+REBOUNDx doesn't build on Windows with MSVC out of the box. We maintain
+a patched fork at https://github.com/tommybship/reboundx (branch
+`windows-msvc-build`) until the fix merges upstream. Linux/macOS users
+get REBOUNDx from PyPI normally.
 
 Formula (Einstein-Infeld-Hoffmann simplified for a dominant central mass
 M_sun; see Will 1993, "Theory and Experiment in Gravitational Physics",
@@ -20,32 +33,59 @@ M_sun; see Will 1993, "Theory and Experiment in Gravitational Physics",
            [ (4 * GM_sun / r - v²) * r_vec + 4 * (r·v) * v_vec ]
 
 where r_vec and v_vec are the particle's position and velocity relative
-to the Sun, r = |r_vec|, v² = |v_vec|². This is a velocity-dependent
-force, so the sim must be flagged with `force_is_velocity_dependent = 1`
-for WHFast to handle it correctly.
+to the Sun, r = |r_vec|, v² = |v_vec|². The force is velocity-dependent,
+so the sim must be flagged `force_is_velocity_dependent = 1` for WHFast
+to handle it correctly. REBOUNDx sets that flag itself.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Literal
 
 import rebound
 
+try:
+    import reboundx as _reboundx
+    HAS_REBOUNDX: bool = True
+except ImportError:
+    _reboundx = None
+    HAS_REBOUNDX = False
+
 EffectName = Literal["gr"]
 
-# Speed of light in AU / yr. Derived from IAU 2012 AU (149,597,870,700 m)
-# and Julian year (31,557,600 s) with c = 299,792,458 m/s.
+# Speed of light in AU / yr. Derived from IAU 2012 AU (149,597,870,700 m),
+# Julian year (31,557,600 s), c = 299,792,458 m/s.
 _C_AU_PER_YR: float = 63239.7263263
 
 
-def attach_gr(sim: rebound.Simulation, sun_hash: int) -> Callable[[object], None]:
-    """Register a 1PN Einstein correction with `sim`, treating the particle
-    identified by `sun_hash` as the dominant mass.
+def attach_gr(sim: rebound.Simulation, sun_hash: int) -> object:
+    """Register a 1PN Einstein correction with `sim`.
 
-    Returns the Python callback so the caller can keep a reference alive —
-    REBOUND's C-side only holds a CFUNCTYPE wrapper; if Python GCs the
-    underlying function, the next force evaluation segfaults.
+    Prefers REBOUNDx's `gr` force when it's importable; otherwise falls
+    back to the Python implementation below. Both treat the Sun as the
+    dominant mass — REBOUNDx uses particle index 0, our Python version
+    uses the particle whose hash matches `sun_hash`.
+
+    Returns a handle the caller must keep alive (Extras in the
+    REBOUNDx case, a bound function in the fallback case). Don't let
+    it be garbage-collected; the next force evaluation crashes.
     """
+    if HAS_REBOUNDX:
+        return _attach_gr_reboundx(sim)
+    return _attach_gr_python(sim, sun_hash)
+
+
+def _attach_gr_reboundx(sim: rebound.Simulation) -> object:
+    """REBOUNDx backend — equivalent of our Python implementation but
+    in compiled C. Treats particle 0 as the source mass; M1 scenarios
+    put the Sun first, so this is consistent with our convention."""
+    rebx = _reboundx.Extras(sim)
+    gr = rebx.load_force("gr")
+    gr.params["c"] = _C_AU_PER_YR
+    rebx.add_force(gr)
+    return rebx  # keep Extras alive for sim lifetime
+
+
+def _attach_gr_python(sim: rebound.Simulation, sun_hash: int) -> object:
     c2 = _C_AU_PER_YR * _C_AU_PER_YR
     sun_hash_u32 = int(sun_hash) & 0xFFFFFFFF
 

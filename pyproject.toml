@@ -29,6 +29,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional: REBOUNDx for additional physics effects (GR, SRP, tides, ...).
+# Linux/macOS: pip install 'tomcosmos[reboundx]' pulls from PyPI.
+# Windows: REBOUNDx's PyPI source doesn't build with MSVC; install from
+# our patched fork until the fixes merge upstream:
+#   pip install git+https://github.com/tommybship/reboundx.git@windows-msvc-build
+# When not installed, tomcosmos falls back to a Python 1PN GR implementation
+# automatically — the `effects: [gr]` toggle still works either way.
+reboundx = ["reboundx>=4.6,<5"]
 dev = [
     "pytest>=8,<9",
     "pytest-xdist>=3.5,<4",
@@ -68,6 +76,7 @@ warn_return_any = false
 [[tool.mypy.overrides]]
 module = [
     "rebound.*",
+    "reboundx.*",
     "spiceypy.*",
     "skyfield.*",
     "pyvista.*",

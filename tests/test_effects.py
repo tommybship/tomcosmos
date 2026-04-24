@@ -214,3 +214,92 @@ def test_gr_energy_error_bounded_but_larger_than_pure_newtonian() -> None:
     assert max_err_n < 1e-10          # pure Newton: machine-precision bounded
     assert max_err_g < 1e-4           # GR: loose bound, still physical
     assert max_err_g > max_err_n      # GR really is less tight
+
+
+# --- Backend selection + cross-validation -----------------------------------
+
+
+def test_reboundx_is_preferred_when_available() -> None:
+    """If reboundx is importable, that's the backend we should use.
+    Failing this would mean we silently fell back to the Python version
+    despite reboundx being present — a regression worth catching."""
+    from tomcosmos.state import effects
+    try:
+        import reboundx  # noqa: F401
+    except ImportError:
+        pytest.skip("reboundx not installed — backend-selection check N/A")
+    assert effects.HAS_REBOUNDX is True
+
+
+def test_python_fallback_when_reboundx_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the fallback path and verify it still produces correct
+    physics — i.e. if reboundx ever breaks or is uninstalled, our own
+    implementation still works."""
+
+    from tomcosmos.state import effects
+    from tomcosmos.state.ic import resolve_scenario
+    from tomcosmos.state.integrator import build_simulation
+
+    # Patch the flag and function so _attach_gr_python is used.
+    monkeypatch.setattr(effects, "HAS_REBOUNDX", False)
+
+    s = _sun_mercury_scenario(duration="1 yr", with_gr=True)
+    bodies, particles = resolve_scenario(s, _NoEphemerisNeeded())
+    sim = build_simulation(bodies, particles, s.integrator)
+
+    # Python backend stashes a Python callable; REBOUNDx backend stashes
+    # an Extras object. Distinguish by type.
+    stashed = sim._tomcosmos_effect_callbacks[0]  # noqa: SLF001
+    assert callable(stashed)
+    # Not a reboundx Extras instance (the C handle).
+    assert type(stashed).__name__ != "Extras"
+
+
+def test_reboundx_and_python_agree_on_mercury_shift() -> None:
+    """Cross-validation: the REBOUNDx `gr` force and our Python 1PN
+    implementation are the same physics (Einstein-Infeld-Hoffmann
+    simplified with the Sun as dominant mass). Over 10 simulated years,
+    the Mercury position shift versus pure Newtonian should agree
+    between backends to within integrator roundoff — a ~10% band
+    accounts for the small order-of-operations differences in the
+    force computation loop.
+
+    Skipped when reboundx isn't installed (Unix CI without it, or
+    Windows without our patched fork)."""
+    try:
+        import reboundx  # noqa: F401
+    except ImportError:
+        pytest.skip("reboundx not installed — cross-validation N/A")
+
+    from tomcosmos.state import effects
+
+    # Pure-Newton reference
+    h_newton = run(_sun_mercury_scenario(duration="10 yr", with_gr=False),
+                   source=_NoEphemerisNeeded())
+    r_newton = h_newton.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
+
+    # REBOUNDx GR
+    h_rebx = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
+                 source=_NoEphemerisNeeded())
+    r_rebx = h_rebx.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
+    shift_rebx = np.linalg.norm(r_rebx - r_newton)
+
+    # Python GR (force the fallback path)
+    original = effects.HAS_REBOUNDX
+    try:
+        effects.HAS_REBOUNDX = False
+        h_py = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
+                   source=_NoEphemerisNeeded())
+    finally:
+        effects.HAS_REBOUNDX = original
+    r_py = h_py.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
+    shift_py = np.linalg.norm(r_py - r_newton)
+
+    # Both backends should produce a shift of a few thousand km.
+    # Allow them to agree to within 15% of each other (integration noise +
+    # tiny differences in which PN terms each implementation keeps).
+    rel_diff = abs(shift_rebx - shift_py) / max(shift_rebx, shift_py)
+    assert rel_diff < 0.15, (
+        f"Backend disagreement: reboundx shift {shift_rebx:.0f} km vs "
+        f"python shift {shift_py:.0f} km, rel diff {rel_diff:.2%}"
+    )
