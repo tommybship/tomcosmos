@@ -195,6 +195,32 @@ def info_cmd(
             typer.echo(f"  {name}: {sha[:12]}...")
 
 
+@app.command(name="view")
+def view_cmd(
+    parquet_path: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True,
+        metavar="PARQUET", help="Path to a run's Parquet file.",
+    ),
+    scaling: str = typer.Option(
+        "log", "--scaling",
+        help="Body scaling: 'log' (default), 'true', or 'marker'.",
+    ),
+) -> None:
+    """Open a 3D viewer on a run's Parquet file."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+
+    try:
+        history = StateHistory.from_parquet(parquet_path)
+    except (OSError, ValueError) as e:
+        _error(str(e), exit_code=5)
+
+    try:
+        viewer = Viewer(history, scaling=scaling)  # type: ignore[arg-type]
+    except ValueError as e:
+        _error(str(e), exit_code=2)
+    viewer.show()
+
+
 @app.command(name="fetch-kernels")
 def fetch_kernels_cmd() -> None:
     """Download SPICE / skyfield kernels into the kernel directory.
