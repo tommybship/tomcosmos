@@ -11,7 +11,7 @@ A Python solar system state simulator: N-body integration with ephemeris-sourced
 
 ## Status
 
-**M1 — Sun + 8 planets, validated.** WHFast energy conservation holds at < 1e-10 relative over 10 years. Earth tracks ephemeris within ~2,000,000 km over one year — the bulk of that drift is the physics we deliberately skip (moons, GR, asteroid belt), not integration error. See [PLAN.md](PLAN.md) for the full roadmap through M6 and the measured accuracy envelope.
+**M1 — Sun + 8 planets, validated.** WHFast energy conservation holds at < 1e-10 relative over 10 years. Earth tracks ephemeris within ~2,000,000 km over one year; the bulk of that drift is physics the M1 model omits (moons, GR, `GM` vs. `G × m` precision), not integration error. M2 adds major moons (targeting roughly halved drift); M3 adds relativistic corrections via `REBOUNDx.gr` and JPL `GM` values, targeting Earth 1-yr drift on the order of ~10,000 km. See [PLAN.md](PLAN.md) for the full roadmap and the current accuracy envelope with M3 targets.
 
 ## Quickstart
 

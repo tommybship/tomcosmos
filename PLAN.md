@@ -22,18 +22,26 @@
 19. [Glossary](#glossary)
 
 ## Context
-Build a Python-based solar system simulator with **learning-grade accuracy** — tight enough that the physics reads clearly (Lagrange points emerge naturally from N-body rather than sphere-of-influence approximations; Kepler's third law recoverable from measured periods; energy bounded under symplectic integration), but explicitly not mission-planning-grade. See Non-goals for what we're deliberately leaving out. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while having something that feels like a real tool. Shareability matters; packaging later is acceptable.
+Build a Python-based solar system simulator whose **accuracy tightens over milestones**. M1 ships with Sun + planets at learning-grade (the physics reads clearly — Lagrange points emerge naturally from N-body, Kepler's third law recoverable, energy bounded under symplectic integration — but Earth drifts ~2M km against JPL's ephemeris after 1 year because we lack moons, GR, and GM-direct masses). M2 adds major moons. M3 adds relativistic corrections via `REBOUNDx.gr` and JPL `GM` values directly, targeting Earth 1-yr drift on the order of ~10,000 km. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while building something that could plausibly end up useful. Shareability matters; packaging later is acceptable.
 
 ## Non-goals
 
 Pinning these explicitly so scope doesn't creep across milestones:
-- **General relativity.** No GR corrections. Mercury's perihelion will precess at Newtonian rate, ~0.43 arcsec/century short of observed. `REBOUNDx.gr` is a future option, not a commitment.
 - **Non-gravitational forces.** No solar radiation pressure, Yarkovsky, outgassing, atmospheric drag. Small-body trajectories (M5) are pure-gravity approximations.
 - **Planetary rotation / orientation dynamics.** Spin axes are available as data for visualization, but no torque integration. No tidal dissipation.
 - **Actual mission design.** No Lambert solvers, trajectory optimization, or targeting. M4 "spacecraft" scenarios are for visualizing maneuvers, not planning them.
 - **Byte-identical cross-platform reproducibility.** Floating-point associativity under different BLAS/CPU combinations makes this intractable. Same-machine reruns agreeing to ~1e-10 is the bar.
 - **Launch / atmospheric phase.** M4 probes start already in heliocentric orbit; we don't model ascent, Earth-departure maneuvers relative to Earth's rotating frame, or anything requiring geocentric sub-day timesteps.
-- **GM vs. `G × m` precision.** Real mission tools use the JPL gravitational parameter `GM` directly (known to ~10 digits), because the gravitational constant `G` alone is known to only ~4 digits. We use `m` from `constants.py` and let REBOUND multiply by its `G`. This caps practical accuracy at ~1e-4 relative, which is the real source of the "learning-grade" label — revisit only if a milestone needs it.
+
+### Deferred but committed (not non-goals)
+
+These are scope for later milestones, not permanent omissions. M1 runs with Sun + planets only; the tighter model grows from M2 onward:
+
+- **Major moons** — M2. Moon (Luna), the Galileans, Titan, Enceladus, Triton. Adding Luna alone empirically cuts Earth's 1-year drift roughly in half; the full set tightens Jupiter-system and Saturn-system dynamics by similar factors.
+- **General relativity** — M3. Enabled via `REBOUNDx.gr` (or `gr_potential`), a standard Einstein post-Newtonian correction. Directly recovers Mercury's perihelion precession (~0.43 arcsec/century) and tightens every inner-body position by a proportionally smaller amount. Opt-in per scenario; no overhead when disabled.
+- **JPL GM values instead of `m × G`** — M3 alongside GR. Masses in `constants.py` are re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Implementation: derive each body's internal mass at package load so downstream unit conversions stay unchanged.
+
+Each of these moves the accuracy envelope tighter by a measurable factor. The M1 envelope (Earth 1-yr ≤ 2e6 km, see below) reflects *current* scope. M3 target once moons + GR + GM-direct land: Earth 1-yr on the order of ~1e4 km or better.
 
 ## Project location and layout
 - **On disk**: `C:\git\tommybship\tomcosmos` — all paths in this plan are relative to this directory.
@@ -824,14 +832,14 @@ Two processors: JSON to file, colorized console renderer to stderr when `--verbo
 
 ## Accuracy envelope
 
-Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Values are **observed** (not aspirational) for the baseline scenario — Sun + 8 planets from DE440 ICs, no moons, no GR, no non-grav forces. Adding the Moon roughly halves the Earth tolerance (empirically); adding all major moons + GR would tighten things further but is scope for later milestones.
+Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Two columns per body: **M1 current** (observed with Sun + 8 planets, no moons, no GR) and **M3 target** (once major moons + GR via `REBOUNDx.gr` + JPL `GM` values have landed). Target numbers are engineering estimates; we'll calibrate them against actual M3 measurements the same way we did for M1.
 
-| Timespan | Earth vs. ephemeris | Mercury vs. ephemeris | Energy error (WHFast) | Energy error (IAS15) |
+| Timespan | Earth (M1 current / M3 target) | Mercury (M1 / M3) | Energy error (WHFast) | Energy error (IAS15) |
 |---|---|---|---|---|
-| 1 year | < 2,000,000 km | < 700,000 km | bounded ≤ 1e-10 | ≤ 1e-13 |
-| 10 years | < 2e7 km | < 5e6 km | bounded ≤ 1e-9 | ≤ 1e-12 |
-| 100 years | < 2e8 km | < 5e7 km | bounded ≤ 1e-9 | ≤ 1e-11 |
-| 1000 years | (don't compare to ephemeris — DE440 coverage + missing physics dominate) | — | bounded ≤ 1e-8 | ≤ 1e-10 |
+| 1 year | < 2e6 km / < 1e4 km | < 7e5 km / < 1e4 km | bounded ≤ 1e-10 | ≤ 1e-13 |
+| 10 years | < 2e7 km / < 1e5 km | < 5e6 km / < 1e5 km | bounded ≤ 1e-9 | ≤ 1e-12 |
+| 100 years | < 2e8 km / < 1e6 km | < 5e7 km / < 5e5 km | bounded ≤ 1e-9 | ≤ 1e-11 |
+| 1000 years | (don't compare to ephemeris — DE440 coverage dominates) | — | bounded ≤ 1e-8 | ≤ 1e-10 |
 
 - **"Bounded" means symplectic oscillation, not drift.** Linear-regression slope of `log\|ΔE/E\|` vs. time should be indistinguishable from zero for WHFast. A non-zero slope is a bug (wrong timestep, bad units, lost `move_to_com()`).
 - **Practical precision ceiling is ~1e-4 relative** because we use mass × G rather than GM (see Non-goals). The envelope above is dominated by that, not by integration error — which is why IAS15 at machine precision per step doesn't buy us real-world accuracy beyond what WHFast delivers.
