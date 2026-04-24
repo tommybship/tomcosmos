@@ -29,3 +29,10 @@ dependencies:
   - pip
   - pip:
       - -e .
+      # REBOUNDx — optional GR / SRP / Yarkovsky / tides / ... forces.
+      # We install from our fork's Windows-MSVC branch, which is a
+      # superset of upstream (same behavior on Linux/macOS, plus the
+      # build fixes Windows needs). When upstream merges the patches
+      # we switch this back to `reboundx>=4.6,<5` from PyPI.
+      # Tracks https://github.com/dtamayo/reboundx/issues/137 et al.
+      - git+https://github.com/tommybship/reboundx.git@windows-msvc-build
