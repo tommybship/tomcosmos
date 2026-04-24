@@ -51,6 +51,11 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP", "SIM", "N"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-bugbear]
+# typer uses function calls in argument defaults as the canonical idiom;
+# whitelist them so B008 doesn't flag every command definition.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = false
