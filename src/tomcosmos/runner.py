@@ -5,17 +5,25 @@ Most of the heavy lifting lives in specialized modules (ephemeris
 query, IC resolution, REBOUND wrapper); this file stitches them
 together and owns the integration loop.
 
-Part 5 produces an in-memory StateHistory; Parquet persistence,
-checkpointing, and structured diagnostics capture land in part 6.
+As of part 6, `run()` captures RunMetadata and (optionally) writes a
+Parquet output. Output-path resolution follows PLAN.md > "Output paths":
+  - If `scenario.output.path` is set, use it (relative paths resolve
+    under `config.runs_dir()`).
+  - Otherwise default to `runs/<scenario_name>__<utc_iso_basic>.parquet`
+    so reruns of the same scenario don't silently overwrite.
 """
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 import rebound
 from astropy import units as u
 
+from tomcosmos.config import runs_dir
+from tomcosmos.io.diagnostics import RunMetadata, capture_metadata
 from tomcosmos.io.history import COLUMNS, StateHistory
 from tomcosmos.state.ephemeris import EphemerisSource, SkyfieldSource
 from tomcosmos.state.ic import (
@@ -37,21 +45,32 @@ _AU_PER_YR_TO_KM_PER_S: float = _AU_KM / _YR_S
 def run(
     scenario: Scenario,
     source: EphemerisSource | None = None,
+    *,
+    write: bool = False,
+    overwrite: bool = False,
+    allow_dirty: bool = True,
 ) -> StateHistory:
     """Integrate a `Scenario` end-to-end and return an in-memory StateHistory.
 
-    Steps:
-      1. Resolve ephemeris source (skyfield by default; pass any
-         EphemerisSource to override).
-      2. Verify the scenario window is inside the source's coverage.
-      3. Resolve every Body / TestParticle to ICRF-barycentric state.
-      4. Build the REBOUND simulation (AU/yr/Msun internally).
-      5. Sample at the scenario's output cadence, converting each row
-         back to km / km·s⁻¹ / seconds at the I/O boundary.
-      6. Record |ΔE/E₀| per sample and return.
+    If `write=True`, also persists the result to Parquet at the path
+    resolved from `scenario.output.path` (or a timestamped default).
 
-    No Parquet I/O, no metadata capture yet — this is the minimal
-    library-level integration loop. Part 6 wraps it with persistence.
+    Parameters
+    ----------
+    scenario:
+        Parsed and validated Scenario.
+    source:
+        Ephemeris backend; defaults to a SkyfieldSource using DE440s.
+    write:
+        Persist to Parquet on completion. Library default is False
+        (stay in memory); the CLI passes True.
+    overwrite:
+        Allow overwriting an existing output path. Only consulted when
+        `write=True`.
+    allow_dirty:
+        Allow running with uncommitted changes in the git working tree.
+        Library default is True (user owns their env); CLI passes False
+        so `tomcosmos run` enforces clean-tree discipline.
     """
     if source is None:
         source = SkyfieldSource()
@@ -63,6 +82,7 @@ def run(
     sample_times_yr = _sample_grid(scenario)
     e0 = sim.energy()
 
+    start = datetime.now(UTC)
     records: list[dict[str, object]] = []
     for sample_idx, t_yr in enumerate(sample_times_yr):
         sim.integrate(t_yr)
@@ -72,10 +92,9 @@ def run(
             records.append(_row(sample_idx, t_s, body.name, sim, rel_err))
         for particle in particles:
             records.append(_row(sample_idx, t_s, particle.name, sim, rel_err))
+    end = datetime.now(UTC)
 
-    df = pd.DataFrame.from_records(records, columns=list(COLUMNS))
-    # Narrow types after construction; from_records otherwise infers object.
-    df = df.astype(
+    df = pd.DataFrame.from_records(records, columns=list(COLUMNS)).astype(
         {
             "sample_idx": "int64",
             "t_tdb": "float64",
@@ -91,18 +110,43 @@ def run(
         }
     )
 
+    metadata = capture_metadata(
+        scenario, source, start, end, allow_dirty=allow_dirty
+    )
     all_names = tuple(b.name for b in bodies) + tuple(p.name for p in particles)
-    return StateHistory(df=df, scenario=scenario, body_names=all_names)
+    history = StateHistory(
+        df=df, scenario=scenario, body_names=all_names, metadata=metadata
+    )
+
+    if write:
+        path = resolve_output_path(scenario, metadata)
+        history.to_parquet(path, overwrite=overwrite)
+
+    return history
+
+
+def resolve_output_path(scenario: Scenario, metadata: RunMetadata) -> Path:
+    """Where should `run()` write when persisting this scenario?
+
+    - `scenario.output.path` explicit → honored (relative resolved under
+      `config.runs_dir()`).
+    - Default → `<runs_dir>/<scenario_name>__<utc_iso_basic>.parquet`,
+      with the timestamp from `metadata.start_wallclock` so the filename
+      matches what's embedded in the file.
+    """
+    if scenario.output.path is not None:
+        p = Path(scenario.output.path)
+        return p if p.is_absolute() else runs_dir() / p
+    ts = datetime.fromisoformat(metadata.start_wallclock).strftime("%Y%m%dT%H%M%SZ")
+    return runs_dir() / f"{scenario.name}__{ts}.parquet"
 
 
 def _sample_grid(scenario: Scenario) -> list[float]:
     """Sample times in years, inclusive of 0 and the final whole-cadence step.
 
     If the duration isn't an integer multiple of the cadence, the last sample
-    lands at `n * cadence`, not at `duration` — which means the scenario's
-    tail is trimmed to the last full cadence. We'll add an
-    end-of-window-if-needed sample in a later part once downstream callers
-    start caring about exact coverage.
+    lands at `n * cadence`, not at `duration` — the scenario's tail is
+    trimmed to the last full cadence.
     """
     duration_yr = float(scenario.duration.to(u.yr).value)
     cadence_yr = float(scenario.output.cadence.to(u.yr).value)
@@ -135,6 +179,4 @@ def _row(
     }
 
 
-# Keep the resolved-body types re-exportable without callers poking into
-# state.ic, in case we want to expose them from `tomcosmos` later.
-__all__ = ["run", "StateHistory", "ResolvedBody", "ResolvedTestParticle"]
+__all__ = ["run", "resolve_output_path", "StateHistory", "ResolvedBody", "ResolvedTestParticle"]

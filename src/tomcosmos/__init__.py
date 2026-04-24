@@ -13,7 +13,8 @@ from tomcosmos.exceptions import (
     TomcosmosError,
     UnknownBodyError,
 )
-from tomcosmos.io.history import StateHistory
+from tomcosmos.io.diagnostics import RunMetadata
+from tomcosmos.io.history import StateHistory, load_run
 from tomcosmos.runner import run
 from tomcosmos.state.scenario import (
     SCHEMA_VERSION,
@@ -41,6 +42,7 @@ __all__ = [
     "IntegratorDivergedError",
     "KernelDriftError",
     "OutputConfig",
+    "RunMetadata",
     "SCHEMA_VERSION",
     "Scenario",
     "ScenarioValidationError",
@@ -50,6 +52,7 @@ __all__ = [
     "TomcosmosError",
     "UnknownBodyError",
     "__version__",
+    "load_run",
     "resolve_body_constant",
     "run",
 ]

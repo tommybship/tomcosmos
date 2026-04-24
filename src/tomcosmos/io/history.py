@@ -1,9 +1,8 @@
 """StateHistory — in-memory representation of a simulation's output.
 
-Long-format pandas DataFrame: one row per (sample, body). Parquet I/O
-lands in a follow-up (part 6); this module defines the shape and a
-handful of accessors so everything downstream (analysis, viz) can
-point at a stable surface.
+Long-format pandas DataFrame: one row per (sample, body), plus a
+`RunMetadata` block that travels with the data when written to
+Parquet.
 
 Schema (see PLAN.md > "StateHistory schema"):
     sample_idx     int64      0-indexed sample number (primary with body)
@@ -13,13 +12,24 @@ Schema (see PLAN.md > "StateHistory schema"):
     vx, vy, vz     float64    velocity in ICRF barycentric, km/s
     terminated     bool       True on impact/escape; NaN position thereafter
     energy_rel_err float64    |ΔE/E0| at this sample (same across bodies)
+
+File metadata (Parquet key/value):
+    tomcosmos_run_metadata   JSON-encoded RunMetadata.to_dict()
+    tomcosmos_scenario_yaml  canonical scenario YAML (also inside metadata
+                             — lifted out to a dedicated key for cheap
+                             inspection via `pyarrow.parquet.read_schema`).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
+from tomcosmos.io.diagnostics import RunMetadata
 from tomcosmos.state.scenario import Scenario
 
 COLUMNS: tuple[str, ...] = (
@@ -36,29 +46,33 @@ COLUMNS: tuple[str, ...] = (
     "energy_rel_err",
 )
 
+_META_KEY = b"tomcosmos_run_metadata"
+_SCENARIO_KEY = b"tomcosmos_scenario_yaml"
+
 
 @dataclass(frozen=True)
 class StateHistory:
-    """Output of a `run()`: a DataFrame + the scenario it came from.
+    """Output of `run()` — DataFrame + scenario + run metadata.
 
-    The DataFrame is the authoritative store. Convenience methods below
-    give callers typed access without forcing them to learn the column
-    conventions cold.
+    `metadata` is optional so test helpers can construct histories by hand,
+    but any history produced by `run()` will have it populated. Writing
+    to Parquet without metadata is allowed but emits a minimal file.
     """
 
     df: pd.DataFrame
     scenario: Scenario
     body_names: tuple[str, ...] = field(default_factory=tuple)
+    metadata: RunMetadata | None = None
+
+    # --- Accessors ------------------------------------------------------
 
     @property
     def n_samples(self) -> int:
-        """Number of distinct sample_idx values."""
         if self.df.empty:
             return 0
         return int(self.df["sample_idx"].max()) + 1
 
     def body_trajectory(self, name: str) -> pd.DataFrame:
-        """Slice to one body, return (t_tdb, x, y, z, vx, vy, vz) in order."""
         mask = self.df["body"] == name
         if not mask.any():
             raise KeyError(f"body {name!r} not in StateHistory")
@@ -69,11 +83,69 @@ class StateHistory:
         )
 
     def energy_trace(self) -> pd.DataFrame:
-        """Per-sample (sample_idx, t_tdb, energy_rel_err). One row per sample,
-        collapsed from the repeated-across-bodies column."""
         return (
             self.df.groupby("sample_idx", as_index=False)
             .agg(t_tdb=("t_tdb", "first"), energy_rel_err=("energy_rel_err", "first"))
             .sort_values("sample_idx")
             .reset_index(drop=True)
         )
+
+    # --- Parquet I/O ----------------------------------------------------
+
+    def to_parquet(self, path: str | Path, *, overwrite: bool = False) -> Path:
+        """Write to `path`. Creates parent dirs. Refuses to overwrite an
+        existing file unless `overwrite=True`."""
+        p = Path(path)
+        if p.exists() and not overwrite:
+            raise FileExistsError(
+                f"{p} exists; pass overwrite=True (CLI: --overwrite) to replace"
+            )
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+        table = pa.Table.from_pandas(self.df, preserve_index=False)
+        file_md: dict[bytes, bytes] = {
+            _SCENARIO_KEY: self.scenario.to_yaml_string().encode("utf-8"),
+        }
+        if self.metadata is not None:
+            file_md[_META_KEY] = json.dumps(self.metadata.to_dict()).encode("utf-8")
+
+        existing = table.schema.metadata or {}
+        merged = {**existing, **file_md}
+        table = table.replace_schema_metadata(merged)
+
+        pq.write_table(
+            table, p,
+            use_dictionary=["body"],  # small integer codes + shared name pool
+            compression="snappy",
+        )
+        return p
+
+    @classmethod
+    def from_parquet(cls, path: str | Path) -> StateHistory:
+        """Inverse of `to_parquet`. Reconstructs `Scenario` from embedded YAML
+        and `RunMetadata` from the JSON metadata key (if present)."""
+        p = Path(path)
+        table = pq.read_table(p)
+        md_raw = table.schema.metadata or {}
+
+        scenario_yaml_bytes = md_raw.get(_SCENARIO_KEY)
+        if scenario_yaml_bytes is None:
+            raise ValueError(
+                f"{p}: missing 'tomcosmos_scenario_yaml' metadata — "
+                "not a tomcosmos run output?"
+            )
+        scenario = Scenario.from_yaml_string(scenario_yaml_bytes.decode("utf-8"))
+
+        metadata: RunMetadata | None = None
+        meta_bytes = md_raw.get(_META_KEY)
+        if meta_bytes is not None:
+            metadata = RunMetadata.from_dict(json.loads(meta_bytes.decode("utf-8")))
+
+        df = table.to_pandas()
+        body_names = tuple(df["body"].astype(str).unique().tolist())
+        return cls(df=df, scenario=scenario, body_names=body_names, metadata=metadata)
+
+
+def load_run(path: str | Path) -> StateHistory:
+    """Public top-level helper — see `StateHistory.from_parquet`."""
+    return StateHistory.from_parquet(path)

@@ -236,21 +236,41 @@ class Scenario(_StrictModel):
     def from_yaml(cls, path: str | Path) -> Scenario:
         path = Path(path)
         try:
-            with path.open("r", encoding="utf-8") as f:
-                raw = yaml.safe_load(f)
+            text = path.read_text(encoding="utf-8")
         except OSError as e:
             raise ScenarioValidationError(f"could not read {path}: {e}") from e
+        try:
+            return cls._from_yaml_string(text)
+        except ScenarioValidationError as e:
+            raise ScenarioValidationError(f"scenario {path}: {e}") from e
+
+    @classmethod
+    def from_yaml_string(cls, text: str) -> Scenario:
+        """Parse a scenario from an in-memory YAML string.
+
+        Used by `load_run()` to reconstruct the scenario embedded in a
+        Parquet file's metadata without touching disk.
+        """
+        return cls._from_yaml_string(text)
+
+    @classmethod
+    def _from_yaml_string(cls, text: str) -> Scenario:
+        raw = yaml.safe_load(text)
         if not isinstance(raw, dict):
             raise ScenarioValidationError(
-                f"scenario file {path} must contain a YAML mapping at top level"
+                "scenario YAML must be a mapping at top level"
             )
         raw = _migrate(raw)
         try:
             return cls.model_validate(raw)
         except ValidationError as e:
-            raise ScenarioValidationError(
-                f"scenario {path} failed validation:\n{e}"
-            ) from e
+            raise ScenarioValidationError(f"scenario failed validation:\n{e}") from e
+
+    def to_yaml_string(self) -> str:
+        """Canonical YAML form — embedded in Parquet file metadata and hashed
+        for `scenario_sha256`. Keys are sorted so the hash is stable across
+        arbitrary insertion orders."""
+        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=True)
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:

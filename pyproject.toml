@@ -71,6 +71,7 @@ module = [
     "astroquery.*",
     "astropy.*",
     "pandas.*",
+    "pyarrow.*",
     "yaml",
 ]
 ignore_missing_imports = true
