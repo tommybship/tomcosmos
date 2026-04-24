@@ -22,7 +22,7 @@
 19. [Glossary](#glossary)
 
 ## Context
-Build a Python-based solar system simulator whose **accuracy tightens over milestones**. M1 ships with Sun + planets at learning-grade (the physics reads clearly — Lagrange points emerge naturally from N-body, Kepler's third law recoverable, energy bounded under symplectic integration — but Earth drifts ~2M km against JPL's ephemeris after 1 year because we lack moons, GR, and GM-direct masses). M2 adds major moons. M3 adds relativistic corrections via `REBOUNDx.gr` and JPL `GM` values directly, targeting Earth 1-yr drift on the order of ~10,000 km. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while building something that could plausibly end up useful. Shareability matters; packaging later is acceptable.
+Build a Python-based solar system simulator whose **accuracy tightens over milestones**. M1 ships with Sun + planets at learning-grade (the physics reads clearly — Lagrange points emerge naturally from N-body, Kepler's third law recoverable, energy bounded under symplectic integration — but Earth drifts ~2M km against JPL's ephemeris after 1 year because we lack moons and `GM`-direct masses). General-relativistic (1PN) corrections are already available as an opt-in effect (`effects: [gr]` on the integrator) implemented as a custom additional-force — no REBOUNDx dependency — so Mercury's perihelion precession is visible now. M2 adds major moons. M3 swaps in JPL `GM` values directly, targeting Earth 1-yr drift on the order of ~10,000 km. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while building something that could plausibly end up useful. Shareability matters; packaging later is acceptable.
 
 ## Non-goals
 
@@ -33,15 +33,15 @@ Pinning these explicitly so scope doesn't creep across milestones:
 - **Byte-identical cross-platform reproducibility.** Floating-point associativity under different BLAS/CPU combinations makes this intractable. Same-machine reruns agreeing to ~1e-10 is the bar.
 - **Launch / atmospheric phase.** M4 probes start already in heliocentric orbit; we don't model ascent, Earth-departure maneuvers relative to Earth's rotating frame, or anything requiring geocentric sub-day timesteps.
 
-### Deferred but committed (not non-goals)
+### Landed, opt-in, or deferred
 
-These are scope for later milestones, not permanent omissions. M1 runs with Sun + planets only; the tighter model grows from M2 onward:
+Not permanent omissions — each of the below is a specific tightening step on the accuracy envelope. Tracked together so the roadmap is in one place.
 
-- **Major moons** — M2. Moon (Luna), the Galileans, Titan, Enceladus, Triton. Adding Luna alone empirically cuts Earth's 1-year drift roughly in half; the full set tightens Jupiter-system and Saturn-system dynamics by similar factors.
-- **General relativity** — M3. Enabled via `REBOUNDx.gr` (or `gr_potential`), a standard Einstein post-Newtonian correction. Directly recovers Mercury's perihelion precession (~0.43 arcsec/century) and tightens every inner-body position by a proportionally smaller amount. Opt-in per scenario; no overhead when disabled.
-- **JPL GM values instead of `m × G`** — M3 alongside GR. Masses in `constants.py` are re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Implementation: derive each body's internal mass at package load so downstream unit conversions stay unchanged.
+- **General relativity (1PN)** — **landed M1**, opt-in. Custom additional-force via REBOUND's `additional_forces` hook; no REBOUNDx dependency (which doesn't build on win-64 and isn't on conda-forge). Enable per scenario with `integrator.effects: [gr]`. Treats the Sun as the dominant mass for the Einstein correction; recovers Mercury's perihelion precession (~43 arcsec/century) — empirically ~3,400 km shift versus pure Newtonian after 10 yr, ~43,000 km after 100 yr. Velocity-dependent force, so WHFast loses strict symplecticity when GR is on (energy bounded at ~1e-7 instead of 1e-13 over 10 yr — still physically correct). IAS15 handles it cleanly if you need tighter energy bookkeeping with GR.
+- **Major moons** — **M2**. Luna, the Galileans, Titan, Enceladus, Triton. Adding Luna alone empirically cuts Earth's 1-year drift roughly in half; the full set tightens Jupiter-system and Saturn-system dynamics by similar factors.
+- **JPL GM values instead of `m × G`** — **M3**. Masses in `constants.py` are re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Implementation: derive each body's internal mass at package load so downstream unit conversions stay unchanged. Can ride alongside the moons work in M2 if convenient.
 
-Each of these moves the accuracy envelope tighter by a measurable factor. The M1 envelope (Earth 1-yr ≤ 2e6 km, see below) reflects *current* scope. M3 target once moons + GR + GM-direct land: Earth 1-yr on the order of ~1e4 km or better.
+The M1 envelope (Earth 1-yr ≤ 2e6 km, see below) reflects *current default* scope (no moons, no GM-direct, GR off). Turning GR on doesn't meaningfully improve the Earth 1-yr baseline — Earth's GR precession is ~3.8 arcsec/century (Mercury is ~43), dominated by the moon and asteroid omissions. M3 target once moons + GM-direct land: Earth 1-yr on the order of ~1e4 km or better, with the same opt-in GR toggle still available for pedagogy.
 
 ## Project location and layout
 - **On disk**: `C:\git\tommybship\tomcosmos` — all paths in this plan are relative to this directory.
@@ -386,7 +386,7 @@ REBOUND provides three integrators we'll use. The rule of thumb: timestep ≤ ~5
 **Operational guidance**
 - **Log energy error every output cadence.** Persist it in the state-history file. Drift = wrong timestep or wrong integrator; oscillation = normal.
 - **Output cadence vs. timestep.** For WHFast (fixed step), if `output_cadence` isn't a whole multiple of `timestep`, REBOUND has to take a partial step at the end to hit the sample time — which technically breaks symplecticity for that step. Three options: (a) choose cadence as an integer multiple of timestep (recommended — e.g., step=1 day, cadence=1 day or 10 day); (b) set `sim.integrator = "whfast"` with `safe_mode = 0` to avoid automatic symplectic corrector toggles, then accept the small end-step error; (c) use `sim.integrate(t, exact_finish_time=False)` and live with cadence jitter of up to one timestep. Default: enforce (a) at scenario-validation time with a warning if the ratio isn't integer.
-- **Validate M1 against ephemeris.** After 1 year of WHFast, Earth should match skyfield/SPICE to <1000 km. After 100 years, drift of 10s of thousands of km is expected (you're not modeling GR, asteroid-belt perturbations, or tides) — that's physics, not a bug.
+- **Validate against ephemeris, but use the calibrated envelope.** The Accuracy envelope section holds the observed numbers (Earth ~2M km at 1 yr for the default Sun+planets scenario). Drift vs. JPL's DE440 is dominated by the physics we skip (moons, asteroids, tides) — that's physics, not a bug. GR is available as `effects: [gr]` but doesn't meaningfully move the Earth baseline because Earth's precession is ~10× smaller than Mercury's.
 - **Never switch integrators mid-run** silently. If a scenario forces a switch (e.g., spacecraft added), the scenario file should name MERCURIUS explicitly.
 - **WHFast requires heliocentric (or Jacobi) coordinates internally** but REBOUND handles this automatically; you feed barycentric state vectors, REBOUND converts on `sim.integrate()`.
 
@@ -396,7 +396,7 @@ REBOUND provides three integrators we'll use. The rule of thumb: timestep ≤ ~5
 - **Data model**:
   - `Body { name, mass_kg?, radius_km?, ic: { source: ephemeris|explicit, spice_id?, r?, v? }, spin? }` — `mass_kg` and `radius_km` are optional; if omitted, resolved from `constants.py` by `name` or `spice_id` (see Body constants below).
   - `TestParticle { name, ic: { type: explicit|lagrange|keplerian, ... } }`
-  - `IntegratorConfig { name: whfast|ias15|mercurius, timestep?, divergence_threshold?, r_crit_hill? }` — `timestep` required for fixed-step integrators, omitted for adaptive. `divergence_threshold` defaults per-integrator (see Operational behaviors).
+  - `IntegratorConfig { name: whfast|ias15|mercurius, timestep?, divergence_threshold?, r_crit_hill?, effects? }` — `timestep` required for fixed-step integrators, omitted for adaptive. `divergence_threshold` defaults per-integrator (see Operational behaviors). `effects` is a list of opt-in physics effects (currently just `gr` for the 1PN Einstein correction); requires a body named `sun` when it contains `gr`.
   - `OutputConfig { format: parquet, cadence, path?, checkpoint?: bool }` — `path` optional; if omitted, defaults to `runs/<scenario_name>__<run_started_utc>.parquet` (see Output paths below).
   - `Scenario { schema_version, name, epoch, duration, integrator, bodies, test_particles?, output }`
 
@@ -555,8 +555,8 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
   - `tests/test_smoke.py` imports `rebound`, creates a 2-body Simulation with our units helper, integrates one step, asserts it didn't crash. CI-ready even if CI is just `pytest` locally.
   - Exit criterion for M0: (1) `conda env create -f environment.yml && conda activate tomcosmos && pip install -e . && python scripts/hello_world.py && pytest` all succeed on a clean checkout; (2) CI smoke workflow green on the first push to `main`.
 
-- **M1 — Sun + 8 planets, validated.** skyfield ICs at chosen epoch → REBOUND WHFast → pyvista with orbit trails.
-  - **Exit criteria:** (1) `tomcosmos run scenarios/sun-planets.yaml` produces a Parquet file; (2) `tomcosmos view runs/sun-planets-baseline.parquet` opens the 3D viewer with all 9 bodies and trails; (3) tests in Tier 1 + Tier 2 pass; (4) Earth position after 1 simulated year matches skyfield to <1000 km; (5) `tomcosmos info` shows embedded metadata (git SHA, kernel hashes, energy-error series).
+- **M1 — Sun + 8 planets, validated; GR toggle shipped.** skyfield ICs at chosen epoch → REBOUND WHFast → pyvista with orbit trails. 1PN GR correction available as `integrator.effects: [gr]` via a custom additional-force (no REBOUNDx dependency).
+  - **Exit criteria:** (1) `tomcosmos run scenarios/sun-planets.yaml` produces a Parquet file; (2) `tomcosmos view runs/sun-planets-baseline.parquet` opens the 3D viewer with all 9 bodies and trails; (3) tests in Tier 1 + Tier 2 pass; (4) Earth position after 1 simulated year matches the calibrated envelope (< 2e6 km for the default scenario); (5) `tomcosmos info` shows embedded metadata (git SHA, kernel hashes, energy-error series); (6) `effects: [gr]` on a Sun-Mercury scenario produces the expected 1PN perihelion shift versus pure Newtonian.
 
 - **M2 — Major moons.** Luna, Galileans, Titan, Saturnian system. Migrate to spiceypy for satellite kernels.
   - **Exit criteria:** (1) Scenario including at least Earth+Moon and Jupiter+4 Galileans runs to completion with IAS15; (2) moons visibly orbit their primaries in the viewer (use the "follow body" camera on Jupiter to see Io zip around); (3) `EphemerisSource` ABC has both `SkyfieldSource` and `SpiceSource` implementations and tests parameterize over both; (4) energy error stays ≤1e-12 over a 10-year run.
@@ -832,7 +832,7 @@ Two processors: JSON to file, colorized console renderer to stderr when `--verbo
 
 ## Accuracy envelope
 
-Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Two columns per body: **M1 current** (observed with Sun + 8 planets, no moons, no GR) and **M3 target** (once major moons + GR via `REBOUNDx.gr` + JPL `GM` values have landed). Target numbers are engineering estimates; we'll calibrate them against actual M3 measurements the same way we did for M1.
+Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Two columns per body: **M1 current** (observed with Sun + 8 planets, no moons, default GR off) and **M3 target** (once major moons + JPL `GM` values have landed; GR is already available). Target numbers are engineering estimates; we'll calibrate them against actual M3 measurements the same way we did for M1.
 
 | Timespan | Earth (M1 current / M3 target) | Mercury (M1 / M3) | Energy error (WHFast) | Energy error (IAS15) |
 |---|---|---|---|---|
@@ -854,6 +854,7 @@ Test tolerances (Tier 3) use this table directly. If a target tightens below wha
 - `src/tomcosmos/state/scenario.py` — Pydantic scenario schema
 - `src/tomcosmos/state/ephemeris.py` — SPICE/skyfield loading, state queries
 - `src/tomcosmos/state/ic.py` — special IC computation (Lagrange, Keplerian, explicit)
+- `src/tomcosmos/state/effects.py` — optional physics effects (1PN GR; SRP/Yarkovsky when those land). Attached via `rebound.Simulation.additional_forces`.
 - `src/tomcosmos/state/integrator.py` — REBOUND wrapper: `Scenario` → `Simulation`
 - `src/tomcosmos/state/frames.py` — frame conversions, astropy-backed
 - `src/tomcosmos/io/history.py` — Parquet state history I/O with embedded metadata (HDF5 fallback if streaming writes needed later)
@@ -924,7 +925,7 @@ If you see 10× these numbers, something is wrong (wrong integrator, wrong units
 
 ## Open questions for later (not blocking)
 - **Rotations/spin axes** — deferred; add when first needed (ground track on a planet, tidally-locked moon viz). `constants.py` has a `spin` slot ready.
-- **Relativistic corrections** — deferred. Probably never needed here, but REBOUND has `REBOUNDx` add-ons (`gr`, `gr_potential`) if you want to experiment with Mercury's perihelion precession.
+- **Higher-order relativistic corrections** — 1PN Einstein correction ships in M1 as `effects: [gr]` (see "Landed, opt-in, or deferred"). 2PN, frame-dragging, and Nordtvedt effects are plausible additions if a use case arises; current scope stops at 1PN.
 - **Saturn's rings, planetary textures, and eclipse shadowing** — visual polish; M6 if ever.
 - **Alternate distribution** — PyInstaller bundle for desktop, Docker image for web viewer. Defer until someone actually asks for a packaged build.
 - **Time precision beyond astropy defaults** — astropy's `Time` uses two-double internally (jd1 + jd2) to keep sub-millisecond precision over millennia. If you need better, revisit; unlikely.
@@ -944,7 +945,7 @@ Jargon that appears throughout the plan, compressed.
 - **Ecliptic** — the plane of Earth's orbit around the Sun. Most solar system orbits are close to (but not in) this plane. Tilted ~23.4° from Earth's equator.
 - **Ephemeris** — tabulated positions of celestial bodies vs time. JPL publishes these as "DE" (Development Ephemeris) files: DE440, DE441, etc.
 - **Energy error (`|ΔE/E|`)** — relative change in total energy from step to step. For a symplectic integrator, this should oscillate around zero with bounded amplitude — never drift linearly.
-- **GR** — General Relativity. Contributes small corrections (e.g., Mercury's perihelion precession at ~43 arcsec/century). Deferred.
+- **GR** — General Relativity. Contributes small corrections (e.g., Mercury's perihelion precession at ~43 arcsec/century). Available in M1 as an opt-in 1PN force via `integrator.effects: [gr]`.
 - **Hill sphere** — region around a body where its gravity dominates over its primary's. `r_hill ≈ a * (m / 3M)^(1/3)`. The Moon is inside Earth's Hill sphere; a comet inside Jupiter's gets slung around.
 - **IAS15** — REBOUND's 15th-order adaptive Gauss-Radau integrator. High accuracy, adaptive step. Not symplectic, but energy error stays at machine precision.
 - **ICRF** — International Celestial Reference Frame. The modern inertial frame for astronomy, defined by distant radio sources. Our internal sim frame.
