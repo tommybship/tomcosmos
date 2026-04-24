@@ -13,6 +13,8 @@ from tomcosmos.exceptions import (
     TomcosmosError,
     UnknownBodyError,
 )
+from tomcosmos.io.history import StateHistory
+from tomcosmos.runner import run
 from tomcosmos.state.scenario import (
     SCHEMA_VERSION,
     Body,
@@ -42,10 +44,12 @@ __all__ = [
     "SCHEMA_VERSION",
     "Scenario",
     "ScenarioValidationError",
+    "StateHistory",
     "TestParticle",
     "TestParticleExplicitIc",
     "TomcosmosError",
     "UnknownBodyError",
     "__version__",
     "resolve_body_constant",
+    "run",
 ]
