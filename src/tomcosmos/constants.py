@@ -24,6 +24,7 @@ class BodyConstant:
 
 
 _RAW: tuple[BodyConstant, ...] = (
+    # --- Sun + 8 planets + Earth's Moon (M1) ---
     BodyConstant("sun",     1.989e30,   695700.0, "#F5C518", 10,  aliases=("sol",)),
     BodyConstant("mercury", 3.3011e23,  2439.7,   "#8C7853", 199),
     BodyConstant("venus",   4.8675e24,  6051.8,   "#E8B273", 299),
@@ -34,6 +35,25 @@ _RAW: tuple[BodyConstant, ...] = (
     BodyConstant("saturn",  5.6834e26,  58232.0,  "#F4E4A1", 699),
     BodyConstant("uranus",  8.6810e25,  25362.0,  "#AFEEEE", 799),
     BodyConstant("neptune", 1.02413e26, 24622.0,  "#4169E1", 899),
+    # --- M2: Major moons (NASA fact sheets / JPL Solar System Dynamics) ---
+    # Galilean moons of Jupiter; SPICE IDs 5xx
+    BodyConstant("io",       8.9319e22, 1821.6,   "#E6C68F", 501),
+    BodyConstant("europa",   4.7998e22, 1560.8,   "#C2A88B", 502),
+    BodyConstant("ganymede", 1.4819e23, 2634.1,   "#9E8A6E", 503),
+    BodyConstant("callisto", 1.0759e23, 2410.3,   "#5B5048", 504),
+    # Major Saturnian moons; SPICE IDs 6xx
+    BodyConstant("mimas",    3.7493e19, 198.2,    "#BDBDBD", 601),
+    BodyConstant("enceladus", 1.0802e20, 252.1,   "#E8F4FF", 602),
+    BodyConstant("tethys",   6.1745e20, 533.0,    "#D8D8D8", 603),
+    BodyConstant("dione",    1.0955e21, 561.7,    "#C9C9C9", 604),
+    BodyConstant("rhea",     2.3065e21, 763.8,    "#BFBFBF", 605),
+    BodyConstant("titan",    1.3452e23, 2574.7,   "#D8AB6E", 606),
+    BodyConstant("iapetus",  1.8056e21, 734.5,    "#A28675", 608),
+    # Largest Uranian moon; SPICE IDs 7xx
+    BodyConstant("titania",  3.4000e21, 788.9,    "#A8A89A", 703),
+    BodyConstant("oberon",   3.0760e21, 761.4,    "#928579", 704),
+    # Largest Neptunian moon; SPICE ID 8xx
+    BodyConstant("triton",   2.1390e22, 1353.4,   "#D4C8B3", 801),
 )
 
 BODY_CONSTANTS: dict[str, BodyConstant] = {b.name: b for b in _RAW}

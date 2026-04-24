@@ -9,6 +9,36 @@ def test_all_expected_bodies_present() -> None:
     assert expected <= set(BODY_CONSTANTS)
 
 
+def test_m2_major_moons_present() -> None:
+    """M2 adds Galileans, major Saturnians, largest Uranians + Triton."""
+    galileans = {"io", "europa", "ganymede", "callisto"}
+    saturnians = {"mimas", "enceladus", "tethys", "dione", "rhea", "titan", "iapetus"}
+    uranians = {"titania", "oberon"}
+    neptunian = {"triton"}
+    assert galileans <= set(BODY_CONSTANTS)
+    assert saturnians <= set(BODY_CONSTANTS)
+    assert uranians <= set(BODY_CONSTANTS)
+    assert neptunian <= set(BODY_CONSTANTS)
+
+
+def test_galilean_spice_ids_in_jupiter_range() -> None:
+    """Galilean SPICE IDs are 501–504 (5xx prefix indicates Jupiter system)."""
+    for name, expected_id in [("io", 501), ("europa", 502),
+                               ("ganymede", 503), ("callisto", 504)]:
+        assert resolve_body_constant(name).spice_id == expected_id
+
+
+def test_titan_resolves_by_spice_id_606() -> None:
+    titan = resolve_body_constant(606)
+    assert titan.name == "titan"
+    assert titan.mass_kg == pytest.approx(1.3452e23, rel=1e-4)
+
+
+def test_triton_in_neptune_range() -> None:
+    triton = resolve_body_constant("triton")
+    assert triton.spice_id == 801  # Neptune system, moon 1
+
+
 def test_resolve_by_canonical_name() -> None:
     b = resolve_body_constant("earth")
     assert b.name == "earth"
