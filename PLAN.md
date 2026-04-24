@@ -160,7 +160,7 @@ Versions pinned to major-version ranges. Conda-forge is the source for everythin
 | `python` | `=3.12` | Interpreter | M0 |
 | `numpy` | `>=1.26,<3` | Arrays, vector math | M0 |
 | `scipy` | `>=1.11,<2` | `optimize.brentq` for Lagrange quintic, Newton's method for Kepler's eq | M0 |
-| `rebound` | `>=4,<5` | N-body integrator (WHFast, IAS15, MERCURIUS) | M0 |
+| `rebound` | `>=4,<5` | N-body integrator (WHFast, IAS15, MERCURIUS) — **pip, not conda-forge** (no `win-64` build on conda-forge; PyPI ships Windows wheels) | M0 |
 | `astropy` | `>=6,<8` | Time scales (TDB/UTC/TT), units, constants, coordinate frames | M0 |
 | `skyfield` | `>=1.48,<2` | Ephemeris on-ramp for M1 | M1 |
 | `spiceypy` | `>=6,<8` | SPICE kernel access for satellite ephemerides | M2 |
@@ -201,7 +201,7 @@ dependencies:
   # runtime
   - numpy>=1.26,<3
   - scipy>=1.11,<2
-  - rebound>=4,<5
+  # rebound is NOT on conda-forge for win-64; installed via pip from pyproject.toml
   - astropy>=6,<8
   - skyfield>=1.48,<2
   - spiceypy>=6,<8

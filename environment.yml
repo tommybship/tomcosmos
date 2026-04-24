@@ -6,7 +6,8 @@ dependencies:
   # runtime
   - numpy>=1.26,<3
   - scipy>=1.11,<2
-  - rebound>=4,<5
+  # rebound is NOT on conda-forge for win-64 (POSIX-only C build); installed
+  # via pip below from pyproject.toml, which pulls prebuilt wheels from PyPI.
   - astropy>=6,<8
   - skyfield>=1.48,<2
   - spiceypy>=6,<8
