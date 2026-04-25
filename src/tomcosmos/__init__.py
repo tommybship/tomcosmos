@@ -26,6 +26,8 @@ from tomcosmos.state.scenario import (
     Scenario,
     TestParticle,
     TestParticleExplicitIc,
+    TestParticleKeplerianIc,
+    TestParticleLagrangeIc,
 )
 
 __version__ = "0.0.1"
@@ -49,6 +51,8 @@ __all__ = [
     "StateHistory",
     "TestParticle",
     "TestParticleExplicitIc",
+    "TestParticleKeplerianIc",
+    "TestParticleLagrangeIc",
     "TomcosmosError",
     "UnknownBodyError",
     "__version__",

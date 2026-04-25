@@ -169,9 +169,50 @@ class TestParticleExplicitIc(_StrictModel):
     frame: Frame = "icrf_barycentric"
 
 
-# M3 will extend this union with LagrangeIc and KeplerianIc.
+class TestParticleLagrangeIc(_StrictModel):
+    """Place a test particle at one of L1-L5 of a primary/secondary pair.
+
+    L4/L5 have closed-form positions (±60° from the secondary in its
+    orbital plane around the primary). L1/L2/L3 are roots of the
+    co-linear quintic; we solve numerically. Both primary and
+    secondary are looked up from the scenario's bodies at `epoch`,
+    so this only works once the integrator has resolved them.
+    """
+
+    type: Literal["lagrange"]
+    point: Literal["L1", "L2", "L3", "L4", "L5"]
+    primary: str = Field(min_length=1)
+    secondary: str = Field(min_length=1)
+
+
+class TestParticleKeplerianIc(_StrictModel):
+    """Six-element osculating Keplerian orbit around `parent`.
+
+    Angles are degrees. `epoch_offset` is optional and defaults to 0,
+    meaning the elements are valid at `scenario.epoch`. Set it for
+    bodies whose elements were measured at a different time (M5
+    will use this for SBDB ingest where each asteroid's elements
+    have their own epoch); for now the resolver kepler-propagates
+    from element-epoch to scenario.epoch when nonzero.
+    """
+
+    type: Literal["keplerian"]
+    parent: str = Field(min_length=1)
+    a_km: float = Field(gt=0)
+    e: float = Field(ge=0, lt=1)  # bound orbits only; M5 may relax
+    inc_deg: float
+    raan_deg: float       # longitude of ascending node Ω
+    argp_deg: float       # argument of periapsis ω
+    mean_anom_deg: float  # mean anomaly M at the element epoch
+    epoch_offset_s: float = 0.0
+    frame: Literal[
+        "icrf_barycentric",
+        "ecliptic_j2000_barycentric",
+    ] = "ecliptic_j2000_barycentric"
+
+
 TestParticleIc = Annotated[
-    TestParticleExplicitIc,
+    TestParticleExplicitIc | TestParticleLagrangeIc | TestParticleKeplerianIc,
     Field(discriminator="type"),
 ]
 

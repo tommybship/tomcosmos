@@ -256,3 +256,237 @@ def test_unknown_body_ephemeris_path_raises(
     )
     with pytest.raises(UnknownBodyError):
         resolve_body(body, EPOCH, skyfield_source)
+
+
+# --- M3: Lagrange-point IC --------------------------------------------------
+
+
+AU_KM = 1.495978707e8
+
+
+def _sun_earth_scenario() -> Scenario:
+    """Scenario with sun + earth at the test epoch — primary/secondary
+    pair for every Lagrange test below."""
+    return Scenario.model_validate({
+        "schema_version": 1,
+        "name": "lagrange-test",
+        "epoch": "2026-04-23T00:00:00 TDB",
+        "duration": "30 day",
+        "integrator": {"name": "ias15"},
+        "output": {"format": "parquet", "cadence": "1 day"},
+        "bodies": [
+            {"name": "sun",   "spice_id": 10,  "ic": {"source": "ephemeris"}},
+            {"name": "earth", "spice_id": 399, "ic": {"source": "ephemeris"}},
+        ],
+    })
+
+
+@pytest.mark.parametrize("point", ["L4", "L5"])
+def test_lagrange_l4_l5_form_equilateral_triangle(
+    skyfield_source: SkyfieldSource, point: str,
+) -> None:
+    """L4 and L5 sit at the apex of an equilateral triangle with the
+    primary and secondary: distance to primary == distance to secondary
+    == primary-secondary separation."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleLagrangeIc
+
+    scenario = _sun_earth_scenario()
+    tp = TestParticle(
+        name=point,
+        ic=TestParticleLagrangeIc(
+            type="lagrange", point=point, primary="sun", secondary="earth",
+        ),
+    )
+    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    R = float(np.linalg.norm(r_earth - r_sun))
+    d_sun = float(np.linalg.norm(rtp.r_km - r_sun))
+    d_earth = float(np.linalg.norm(rtp.r_km - r_earth))
+    # Equilateral: all three pairwise distances equal R within float tol.
+    assert abs(d_sun - R) / R < 1e-12
+    assert abs(d_earth - R) / R < 1e-12
+
+
+def test_lagrange_l4_leads_l5_trails(skyfield_source: SkyfieldSource) -> None:
+    """L4 leads the secondary in its orbital direction (positive component
+    along the secondary's velocity). L5 trails. Sign of the dot product
+    locks the orbital convention against accidental sign flips."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleLagrangeIc
+
+    scenario = _sun_earth_scenario()
+    _, v_earth = skyfield_source.query("earth", scenario.epoch)
+    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    v_earth_rel = v_earth - skyfield_source.query("sun", scenario.epoch)[1]
+
+    def _l(point: str) -> np.ndarray:
+        tp = TestParticle(
+            name=point, ic=TestParticleLagrangeIc(
+                type="lagrange", point=point, primary="sun", secondary="earth",
+            ),
+        )
+        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        return rtp.r_km - r_earth
+
+    # The L4-Earth and L5-Earth vectors should project oppositely onto the
+    # Earth-relative velocity direction.
+    lead = float(np.dot(_l("L4"), v_earth_rel))
+    trail = float(np.dot(_l("L5"), v_earth_rel))
+    assert lead > 0, f"L4 should lead, got dot product {lead}"
+    assert trail < 0, f"L5 should trail, got dot product {trail}"
+
+
+def test_lagrange_l1_l2_collinear_distances(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """L1 and L2 sit ~1.5 million km from Earth on the Sun-Earth line.
+
+    Real values (Sun-Earth, Hill radius scale): L1 ~1.491e6 km toward Sun,
+    L2 ~1.502e6 km away from Sun. Our analytic seed converges to within
+    a few thousand km — bound 1% so the test remains robust as the actual
+    Earth-Sun distance shifts through the year (R_se varies ~3% over an
+    eccentric orbit)."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleLagrangeIc
+
+    scenario = _sun_earth_scenario()
+    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+
+    for point, expected_km in (("L1", 1.491e6), ("L2", 1.502e6)):
+        tp = TestParticle(
+            name=point, ic=TestParticleLagrangeIc(
+                type="lagrange", point=point, primary="sun", secondary="earth",
+            ),
+        )
+        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        d_earth = float(np.linalg.norm(rtp.r_km - r_earth))
+        rel_err = abs(d_earth - expected_km) / expected_km
+        assert rel_err < 0.05, (
+            f"{point}: distance to Earth {d_earth:.3e} km, expected ~{expected_km:.3e}; "
+            f"relative error {rel_err:.3f}"
+        )
+
+
+def test_lagrange_l3_opposite_side_of_primary(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """L3 is on the far side of the primary from the secondary, ~R away
+    from both. Its position vector relative to the primary is anti-parallel
+    to the primary→secondary direction."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleLagrangeIc
+
+    scenario = _sun_earth_scenario()
+    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    R = float(np.linalg.norm(r_earth - r_sun))
+
+    tp = TestParticle(
+        name="L3", ic=TestParticleLagrangeIc(
+            type="lagrange", point="L3", primary="sun", secondary="earth",
+        ),
+    )
+    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    sun_to_l3 = rtp.r_km - r_sun
+    sun_to_earth = r_earth - r_sun
+    # Anti-parallel: cosine ≈ -1.
+    cos_angle = float(
+        np.dot(sun_to_l3, sun_to_earth)
+        / (np.linalg.norm(sun_to_l3) * np.linalg.norm(sun_to_earth))
+    )
+    assert cos_angle < -0.9999, f"L3 should be anti-parallel; cos={cos_angle}"
+    # Distance from Sun close to R (within 1% — secular correction is ~5μ/12 R).
+    assert abs(np.linalg.norm(sun_to_l3) - R) / R < 0.01
+
+
+def test_lagrange_velocity_matches_corotation(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """At any Lagrange point, the velocity in the rotating frame is zero
+    by definition. In the inertial frame, the particle co-rotates with
+    the secondary: its velocity is ω × r (relative to the primary)."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleLagrangeIc
+
+    scenario = _sun_earth_scenario()
+    r_sun, v_sun = skyfield_source.query("sun", scenario.epoch)
+    r_earth, v_earth = skyfield_source.query("earth", scenario.epoch)
+    sep = r_earth - r_sun
+    rel_v = v_earth - v_sun
+    L = np.cross(sep, rel_v)
+    omega = L / np.dot(sep, sep)
+
+    tp = TestParticle(
+        name="L4", ic=TestParticleLagrangeIc(
+            type="lagrange", point="L4", primary="sun", secondary="earth",
+        ),
+    )
+    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    expected_v = v_sun + np.cross(omega, rtp.r_km - r_sun)
+    assert np.allclose(rtp.v_kms, expected_v, rtol=1e-12)
+
+
+# --- M3: Keplerian-elements IC ---------------------------------------------
+
+
+def test_keplerian_circular_orbit_radius_and_speed(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """Circular orbit at semi-major axis a should have |r-parent|=a and
+    speed v=sqrt(μ/a) regardless of orientation."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleKeplerianIc
+
+    scenario = _sun_earth_scenario()
+    r_sun, v_sun = skyfield_source.query("sun", scenario.epoch)
+
+    a = AU_KM
+    tp = TestParticle(
+        name="probe", ic=TestParticleKeplerianIc(
+            type="keplerian", parent="sun",
+            a_km=a, e=0.0,
+            inc_deg=23.4, raan_deg=15.0, argp_deg=42.0, mean_anom_deg=70.0,
+        ),
+    )
+    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    d_sun = float(np.linalg.norm(rtp.r_km - r_sun))
+    v_rel = float(np.linalg.norm(rtp.v_kms - v_sun))
+
+    G = 6.6743e-20
+    M_sun = 1.989e30
+    expected_v = float(np.sqrt(G * M_sun / a))
+    assert abs(d_sun - a) / a < 1e-12
+    # Velocity expected to match within ~0.1%; mass is 4 sig figs in BODY_CONSTANTS.
+    assert abs(v_rel - expected_v) / expected_v < 1e-3
+
+
+def test_keplerian_elliptical_periapsis_apoapsis(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """At mean anomaly 0 (periapsis), |r-parent| should equal a(1-e).
+    At mean anomaly 180° (apoapsis), it should equal a(1+e)."""
+    from tomcosmos import TestParticle
+    from tomcosmos.state.scenario import TestParticleKeplerianIc
+
+    scenario = _sun_earth_scenario()
+    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    a, e = AU_KM, 0.3
+
+    def _radius_at(M_deg: float) -> float:
+        tp = TestParticle(
+            name=f"probe-{M_deg}", ic=TestParticleKeplerianIc(
+                type="keplerian", parent="sun",
+                a_km=a, e=e,
+                inc_deg=0.0, raan_deg=0.0, argp_deg=0.0,
+                mean_anom_deg=M_deg,
+            ),
+        )
+        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        return float(np.linalg.norm(rtp.r_km - r_sun))
+
+    assert abs(_radius_at(0.0) - a * (1.0 - e)) / (a * (1 - e)) < 1e-12
+    assert abs(_radius_at(180.0) - a * (1.0 + e)) / (a * (1 + e)) < 1e-12
