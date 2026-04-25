@@ -137,3 +137,41 @@ def test_kernel_paths_lists_loaded_kernels(skyfield_source: SkyfieldSource) -> N
     assert len(paths) >= 1
     # Base kernel always first
     assert paths[0].name == "de440s.bsp"
+
+
+# --- M2: parented-body positions are SSB-relative, not double-counted -------
+
+# Each Galilean's mean orbital semi-major axis around Jupiter, in AU. The test
+# accepts up to 2× this as a generous bound: we're catching the "moon at 5+ AU
+# from primary" double-count bug, not asserting per-body precision.
+_GALILEAN_RADIUS_AU = {
+    "io":       0.00282,  #  421,800 km
+    "europa":   0.00449,  #  671,100 km
+    "ganymede": 0.00715,  # 1,070,000 km
+    "callisto": 0.01259,  # 1,883,000 km
+}
+
+
+@pytest.mark.parametrize("moon", list(_GALILEAN_RADIUS_AU))
+def test_galilean_is_close_to_jupiter(
+    skyfield_source: SkyfieldSource, kernel_dir: Path, moon: str,
+) -> None:
+    """A satellite-kernel body must end up near its primary, not at 2× the
+    primary's SSB distance.
+
+    Regression for the chained-add bug in pre-2026-04 SkyfieldSource: skyfield
+    already returns SSB-relative positions for parented bodies, so adding the
+    parent's SSB position on top placed every Galilean at twice Jupiter's
+    distance. Bound: 2× the moon's real orbital radius.
+    """
+    if not (kernel_dir / "jup365.bsp").exists():
+        pytest.skip("jup365.bsp not present")
+    t = Time("2026-04-23T00:00:00", scale="tdb")
+    r_moon, _ = skyfield_source.query(moon, t)
+    r_jup, _ = skyfield_source.query("jupiter", t)
+    dist_au = float(np.linalg.norm(r_moon - r_jup)) / AU_KM
+    bound = 2.0 * _GALILEAN_RADIUS_AU[moon]
+    assert dist_au < bound, (
+        f"{moon} is {dist_au:.4f} AU from jupiter, expected ~{_GALILEAN_RADIUS_AU[moon]:.4f} AU; "
+        f"if dist ≈ jupiter's SSB distance the chained-add bug has returned"
+    )

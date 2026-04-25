@@ -2,11 +2,11 @@
 
 Single ABC with a multi-kernel skyfield backend. M2+ adds satellite
 kernels (jup365, sat441, ...) which are downloaded opt-in via
-`fetch-kernels --include <group>`. The backend transparently chains
-across kernels: `query("io", epoch)` resolves Io's position relative
-to Jupiter system barycenter from `jup365.bsp`, then adds the Jupiter
-barycenter → SSB vector from `de440s.bsp`, returning Io in ICRF
-barycentric.
+`fetch-kernels --include <group>`. **Skyfield chains across loaded
+kernels internally**: once both `de440s.bsp` and `jup365.bsp` are
+loaded, `kernel["io"].at(t).position.km` already returns SSB-relative
+coordinates — skyfield walks Io → Jupiter system barycenter → SSB
+itself. We do not add anything on top.
 
 Queries return ICRF barycentric (r_km, v_kms) as shape-(3,) arrays.
 For outer planets in M1 default scenarios (Jupiter–Neptune) we
@@ -65,10 +65,12 @@ class EphemerisSource(ABC):
 
 
 # Canonical body name → (skyfield-key, parent-canonical-name).
-# parent=None means the kernel directly provides this body relative to SSB.
-# parent="jupiter" means we look up <body> in its own kernel (Jupiter system
-# barycenter relative — that's how NAIF satellite kernels are structured)
-# and add the Jupiter-barycenter→SSB vector from de440s.
+# parent=None means the body is queried directly from the base kernel.
+# parent="jupiter" means the body lives in a satellite kernel (e.g. jup365)
+# and skyfield needs the parent's kernel loaded too so it can chain its
+# internal lookup back to SSB. We do not add the parent's position ourselves
+# — skyfield already does that. The parent column drives availability and
+# error messages, not the math.
 _SKYFIELD_RESOLVERS: dict[str, tuple[str, str | None]] = {
     # In-DE440s bodies — direct lookup.
     "sun":       ("sun", None),
@@ -179,28 +181,20 @@ class SkyfieldSource(EphemerisSource):
         if target_kernel is None:
             self._raise_missing_kernel(body, target_key, parent_canonical)
 
+        # For parented bodies, the parent kernel must be loaded too — skyfield
+        # walks the chain through it to reach SSB. Bail with a useful message
+        # if it isn't, before skyfield raises a generic LookupError.
+        if parent_canonical is not None:
+            parent_target, _ = _SKYFIELD_RESOLVERS[parent_canonical]
+            if self._kernel_with(parent_target) is None:
+                raise UnknownBodyError(
+                    f"body {body!r} resolves through parent {parent_canonical!r} "
+                    f"which isn't loaded in any kernel"
+                )
+
         target_pos = target_kernel[target_key].at(t)
         r = np.asarray(target_pos.position.km, dtype=np.float64)
         v = np.asarray(target_pos.velocity.km_per_s, dtype=np.float64)
-
-        if parent_canonical is None:
-            # Direct: target is given relative to SSB by the kernel.
-            return r, v
-
-        # Chained: add the parent's SSB-relative state from de440s.
-        parent_target, parent_parent = _SKYFIELD_RESOLVERS[parent_canonical]
-        parent_kernel = self._kernel_with(parent_target)
-        if parent_kernel is None:
-            raise UnknownBodyError(
-                f"body {body!r} resolves through parent {parent_canonical!r} "
-                f"which isn't loaded in any kernel"
-            )
-        # parent_parent should always be None for our currently-mapped parents
-        # (they all live in de440s relative to SSB). If a future body has a
-        # 3-deep chain, this recursion adds another leg — keep it simple here.
-        parent_pos = parent_kernel[parent_target].at(t)
-        r += np.asarray(parent_pos.position.km, dtype=np.float64)
-        v += np.asarray(parent_pos.velocity.km_per_s, dtype=np.float64)
         return r, v
 
     def available_bodies(self) -> tuple[str, ...]:
