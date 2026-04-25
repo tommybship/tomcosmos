@@ -75,10 +75,12 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 "src/tomcosmos/state/ic.py"             = ["N803", "N806"]
 "src/tomcosmos/analysis/encounters.py"  = ["N803", "N806"]
 "src/tomcosmos/analysis/rotating_frame.py" = ["N803", "N806"]
+"src/tomcosmos/targeting/lambert.py"    = ["N802", "N803", "N806"]
 "tests/test_ic.py"                      = ["N803", "N806"]
 "tests/test_rotating_frame.py"          = ["N803", "N806"]
 "tests/test_dv_events.py"               = ["N803", "N806"]
 "tests/test_encounters.py"              = ["N803", "N806"]
+"tests/test_targeting_lambert.py"       = ["N802", "N803", "N806"]
 
 [tool.mypy]
 python_version = "3.12"
