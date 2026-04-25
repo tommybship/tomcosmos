@@ -11,5 +11,15 @@ B-plane targeting, or low-thrust optimization is a different product
 (see PLAN.md > Non-goals).
 """
 from tomcosmos.targeting.lambert import lambert
+from tomcosmos.targeting.transfer import (
+    MU_SUN_KM3_S2,
+    Transfer,
+    compute_transfer,
+)
 
-__all__ = ["lambert"]
+__all__ = [
+    "MU_SUN_KM3_S2",
+    "Transfer",
+    "compute_transfer",
+    "lambert",
+]

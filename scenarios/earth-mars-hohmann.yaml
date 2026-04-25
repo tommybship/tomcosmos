@@ -1,0 +1,41 @@
+schema_version: 1
+name: earth-mars-hohmann
+# A one-way Hohmann-style transfer from Earth to Mars. The scenario
+# itself just sets up the cast — Sun, Earth, Mars, and a probe riding
+# along with Earth at t=0. The two impulsive burns that turn the
+# probe's trajectory into a real transfer arc are computed at runtime
+# by `tomcosmos.targeting.compute_transfer` (Lambert solver) against
+# the ephemeris-resolved Earth and Mars states at departure and
+# arrival. See tests/test_earth_mars_hohmann.py for the assembly.
+#
+# Why not bake Δvs into the YAML directly? Because the right Δvs
+# depend on the exact ephemeris epoch (Earth and Mars's positions
+# shift across launch windows by a few hundred m/s), and we want
+# this scenario to be a runnable starting point against any epoch
+# the ephemeris covers — not pinned to one launch window's numbers.
+#
+# IAS15 because the transfer arc passes near Earth's Hill sphere on
+# departure and Mars's at arrival; MERCURIUS would also work but
+# IAS15 absorbs the close approach without a regime switch.
+# 2026-10-28 sits inside the real 2026 Earth-Mars launch window —
+# Lambert against this epoch with a 310-day TOF gives near-Hohmann
+# Δvs (~3.15 / 2.65 km/s). Picked from a sweep of departure dates
+# minimizing total Δv against the ephemeris geometry of the period;
+# see scripts/* historical probes.
+epoch: "2026-10-28T00:00:00 TDB"
+duration: "320 day"  # arrival ~310 days in, plus a small tail
+integrator:
+  name: ias15
+output:
+  format: parquet
+  cadence: "1 day"
+bodies:
+  - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
+  - { name: earth, spice_id: 399, ic: { source: ephemeris } }
+  - { name: mars,  spice_id: 499, ic: { source: ephemeris } }
+# The probe is added at scenario-load time by the test harness
+# (tests/test_earth_mars_hohmann.py) — it queries Earth's state at
+# scenario.epoch, places the probe there, and uses
+# `tomcosmos.targeting.compute_transfer` to compute the two impulsive
+# burns. Keeping the probe out of the YAML means the same scenario
+# file works for any launch window without re-tuning hardcoded Δvs.

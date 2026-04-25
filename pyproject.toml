@@ -81,6 +81,7 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 "tests/test_dv_events.py"               = ["N803", "N806"]
 "tests/test_encounters.py"              = ["N803", "N806"]
 "tests/test_targeting_lambert.py"       = ["N802", "N803", "N806"]
+"tests/test_earth_mars_hohmann.py"      = ["N806"]
 
 [tool.mypy]
 python_version = "3.12"
