@@ -171,3 +171,13 @@ def test_info_rejects_non_tomcosmos_parquet(tmp_path: Path) -> None:
     result = runner.invoke(app, ["info", str(p)])
     assert result.exit_code == 5
     assert "tomcosmos_scenario_yaml" in result.stderr
+
+
+# --- fetch-kernels ----------------------------------------------------------
+
+
+def test_fetch_kernels_unknown_group(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TOMCOSMOS_KERNEL_DIR", str(tmp_path))
+    result = runner.invoke(app, ["fetch-kernels", "--include", "vulcan"])
+    assert result.exit_code == 2
+    assert "vulcan" in result.stderr

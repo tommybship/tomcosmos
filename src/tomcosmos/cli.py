@@ -222,24 +222,52 @@ def view_cmd(
 
 
 @app.command(name="fetch-kernels")
-def fetch_kernels_cmd() -> None:
-    """Download SPICE / skyfield kernels into the kernel directory.
+def fetch_kernels_cmd(
+    include: list[str] = typer.Option(
+        [], "--include", "-i",
+        help="Add a kernel group: jupiter | saturn | uranus | neptune | all-moons. "
+             "Default (no --include) fetches just DE440s (~32 MB). Repeatable.",
+    ),
+) -> None:
+    """Download NAIF kernels into the configured kernel directory.
 
-    Skyfield auto-downloads DE440s on first load. This command just
-    constructs a SkyfieldSource to trigger that, so the kernel is on
-    disk before the next `run`.
+    Default fetches DE440s (Sun + 8 planets + Moon, ~32 MB). Use
+    --include to add satellite groups (each is hundreds of MB to ~1 GB
+    — the prompt prints the size before downloading). Existing files
+    are skipped; SHA256 of every kernel is recorded in
+    manifest.json for reproducibility.
     """
+    from tomcosmos.kernel_fetch import fetch_groups
+    from tomcosmos.kernels import (
+        ALL_GROUPS,
+        BASE_GROUP,
+        SATELLITE_GROUPS,
+        group_by_name,
+    )
+
     target = kernel_dir()
     target.mkdir(parents=True, exist_ok=True)
     typer.echo(f"ensuring kernels in {target.resolve()}...")
+
+    groups = [BASE_GROUP]
+    for name in include:
+        if name == "all-moons":
+            groups = list(ALL_GROUPS)
+            break
+        try:
+            groups.append(group_by_name(name))
+        except KeyError:
+            _error(
+                f"unknown kernel group {name!r}. "
+                f"Known: base, all-moons, "
+                f"{', '.join(g.name for g in SATELLITE_GROUPS)}",
+                exit_code=2,
+            )
+
     try:
-        source = SkyfieldSource()
+        fetch_groups(groups, directory=target)
     except Exception as e:  # noqa: BLE001 — network/OS
         _error(f"kernel fetch failed: {e}", exit_code=3)
-    path = source.kernel_path
-    size_mb = path.stat().st_size / (1024 * 1024)
-    typer.echo(f"  {path.name}: {size_mb:.1f} MB")
-    typer.echo("done.")
 
 
 def main() -> None:  # entry point for tomcosmos script

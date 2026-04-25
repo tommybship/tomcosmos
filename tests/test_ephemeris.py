@@ -100,3 +100,31 @@ def test_unknown_body_raises(skyfield_source: SkyfieldSource) -> None:
     t = Time("2026-04-23T00:00:00", scale="tdb")
     with pytest.raises(UnknownBodyError):
         skyfield_source.query("vulcan", t)
+
+
+# --- M2: multi-kernel routing -----------------------------------------------
+
+
+def test_galilean_query_without_kernel_says_how_to_install(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """When jup365.bsp isn't present, asking for Io should fail with a
+    clear instruction to fetch the right kernel — not a generic error."""
+    t = Time("2026-04-23T00:00:00", scale="tdb")
+    with pytest.raises(UnknownBodyError, match=r"jup.*\.bsp|fetch-kernels --include jupiter"):
+        skyfield_source.query("io", t)
+
+
+def test_titan_query_without_kernel_says_how_to_install(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    t = Time("2026-04-23T00:00:00", scale="tdb")
+    with pytest.raises(UnknownBodyError, match=r"sat.*\.bsp|fetch-kernels --include saturn"):
+        skyfield_source.query("titan", t)
+
+
+def test_kernel_paths_lists_loaded_kernels(skyfield_source: SkyfieldSource) -> None:
+    paths = skyfield_source.kernel_paths
+    assert len(paths) >= 1
+    # Base kernel always first
+    assert paths[0].name == "de440s.bsp"
