@@ -118,6 +118,17 @@ def run(
         df=df, scenario=scenario, body_names=all_names, metadata=metadata
     )
 
+    # Post-hoc Hill-sphere encounter detection. Cheap (O(n_samples × n_test
+    # × n_massive) vector ops on already-resolved positions) and lets us
+    # keep the integration loop unaware of analysis. Sub-cadence flybys are
+    # missed by construction — output cadence sets the resolution.
+    from tomcosmos.analysis.encounters import detect_hill_encounters
+    events = detect_hill_encounters(history)
+    history = StateHistory(
+        df=df, scenario=scenario, body_names=all_names,
+        metadata=metadata, events=events,
+    )
+
     if write:
         path = resolve_output_path(scenario, metadata)
         history.to_parquet(path, overwrite=overwrite)

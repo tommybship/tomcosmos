@@ -57,12 +57,18 @@ class StateHistory:
     `metadata` is optional so test helpers can construct histories by hand,
     but any history produced by `run()` will have it populated. Writing
     to Parquet without metadata is allowed but emits a minimal file.
+
+    `events` is the per-sample encounter / Δv / impact log. Empty when
+    the run has no test particles or no detected events. Persists as a
+    sidecar parquet (`<basename>.events.parquet`) next to the trajectory
+    file — see `to_parquet` and `from_parquet`.
     """
 
     df: pd.DataFrame
     scenario: Scenario
     body_names: tuple[str, ...] = field(default_factory=tuple)
     metadata: RunMetadata | None = None
+    events: pd.DataFrame | None = None
 
     # --- Accessors ------------------------------------------------------
 
@@ -94,7 +100,13 @@ class StateHistory:
 
     def to_parquet(self, path: str | Path, *, overwrite: bool = False) -> Path:
         """Write to `path`. Creates parent dirs. Refuses to overwrite an
-        existing file unless `overwrite=True`."""
+        existing file unless `overwrite=True`.
+
+        Events (when present and non-empty) are written to a sidecar
+        parquet at `<path stem>.events.parquet` so big trajectory files
+        don't bloat with sparse event data. The sidecar is overwritten
+        in lockstep with the trajectory whenever `overwrite=True`.
+        """
         p = Path(path)
         if p.exists() and not overwrite:
             raise FileExistsError(
@@ -118,6 +130,15 @@ class StateHistory:
             use_dictionary=["body"],  # small integer codes + shared name pool
             compression="snappy",
         )
+
+        events_path = _events_sidecar_path(p)
+        if self.events is not None and not self.events.empty:
+            events_table = pa.Table.from_pandas(self.events, preserve_index=False)
+            pq.write_table(events_table, events_path, compression="snappy")
+        elif events_path.exists() and overwrite:
+            # Stale sidecar from a prior run that had events — clear it so
+            # the on-disk pair matches the in-memory state.
+            events_path.unlink()
         return p
 
     @classmethod
@@ -143,7 +164,21 @@ class StateHistory:
 
         df = table.to_pandas()
         body_names = tuple(df["body"].astype(str).unique().tolist())
-        return cls(df=df, scenario=scenario, body_names=body_names, metadata=metadata)
+
+        events: pd.DataFrame | None = None
+        events_path = _events_sidecar_path(p)
+        if events_path.exists():
+            events = pq.read_table(events_path).to_pandas()
+
+        return cls(
+            df=df, scenario=scenario, body_names=body_names,
+            metadata=metadata, events=events,
+        )
+
+
+def _events_sidecar_path(trajectory_path: Path) -> Path:
+    """`runs/foo.parquet` -> `runs/foo.events.parquet`."""
+    return trajectory_path.with_suffix(".events.parquet")
 
 
 def load_run(path: str | Path) -> StateHistory:
