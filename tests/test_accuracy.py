@@ -116,3 +116,73 @@ def test_energy_bounded_over_10_years(
         # detectable. We assert the slope is below a loose 1e-9 per sec
         # to catch real leaks without being spuriously flaky.
         assert slope < 1e-9, f"energy drift detected: slope={slope:.2e} log10/sec"
+
+
+# --- M2 exit criterion #4: IAS15 holds energy to <1e-12 over 10 yr ----------
+
+
+def _earth_moon_long(duration: str, cadence: str) -> Scenario:
+    return Scenario.model_validate(
+        {
+            "schema_version": 1,
+            "name": f"earth-moon-{duration.replace(' ', '')}",
+            "epoch": "2026-01-01T00:00:00 TDB",
+            "duration": duration,
+            "integrator": {"name": "ias15"},
+            "output": {"format": "parquet", "cadence": cadence},
+            "bodies": [
+                {"name": n, "spice_id": sid, "ic": {"source": "ephemeris"}}
+                for n, sid in [("sun", 10), ("earth", 399), ("moon", 301)]
+            ],
+        }
+    )
+
+
+def _jupiter_galileans_long(duration: str, cadence: str) -> Scenario:
+    return Scenario.model_validate(
+        {
+            "schema_version": 1,
+            "name": f"jupiter-galileans-{duration.replace(' ', '')}",
+            "epoch": "2026-01-01T00:00:00 TDB",
+            "duration": duration,
+            "integrator": {"name": "ias15"},
+            "output": {"format": "parquet", "cadence": cadence},
+            "bodies": [
+                {"name": n, "spice_id": sid, "ic": {"source": "ephemeris"}}
+                for n, sid in [
+                    ("sun", 10), ("jupiter", 599),
+                    ("io", 501), ("europa", 502),
+                    ("ganymede", 503), ("callisto", 504),
+                ]
+            ],
+        }
+    )
+
+
+def test_ias15_earth_moon_energy_under_1e_minus_12_over_10_years(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """M2 exit criterion #4: IAS15 holds |ΔE/E| ≤ 1e-12 on Earth+Moon
+    over a 10-year integration. IAS15's per-step error target is
+    machine precision; a violation here means wrong units, missing
+    move_to_com(), or a regression in the moon-IC pipeline."""
+    scenario = _earth_moon_long(duration="10 yr", cadence="30 day")
+    history = run(scenario, source=skyfield_source)
+    max_err = float(history.df["energy_rel_err"].max())
+    assert max_err < 1e-12, f"Earth+Moon |ΔE/E| over 10 yr: {max_err:.3e}"
+
+
+def test_ias15_jupiter_galileans_energy_under_1e_minus_12_over_10_years(
+    skyfield_source: SkyfieldSource,
+    kernel_dir,  # type: ignore[no-untyped-def]
+) -> None:
+    """M2 exit criterion #4 on the stiffer system: Jupiter + 4 Galileans
+    over 10 years. Io's 1.77-day period forces IAS15 to take small
+    adaptive steps; energy error is the load-bearing diagnostic that
+    the adaptive controller is converging."""
+    if not (kernel_dir / "jup365.bsp").exists():
+        pytest.skip("jup365.bsp not present")
+    scenario = _jupiter_galileans_long(duration="10 yr", cadence="30 day")
+    history = run(scenario, source=skyfield_source)
+    max_err = float(history.df["energy_rel_err"].max())
+    assert max_err < 1e-12, f"Jupiter+Galileans |ΔE/E| over 10 yr: {max_err:.3e}"
