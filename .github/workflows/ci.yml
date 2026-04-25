@@ -35,5 +35,13 @@ jobs:
         run: mypy src/tomcosmos/state
         continue-on-error: true
 
+      - name: Fetch base kernel (de440s)
+        # `tomcosmos run` instantiates SkyfieldSource by default, which lazily
+        # downloads de440s.bsp if absent. Under `pytest -n auto` two workers
+        # would race to write the same file; on Windows that race fails with
+        # WinError 5 (rename to existing file). Fetch once up front so the
+        # parallel test runners only read.
+        run: tomcosmos fetch-kernels
+
       - name: Tests
         run: pytest -n auto -m "not ephemeris and not viewer"
