@@ -23,12 +23,21 @@ from tomcosmos.config import kernel_dir
 from tomcosmos.kernels import KernelGroup
 
 
-def fetch_groups(groups: list[KernelGroup], directory: Path | None = None) -> None:
+def fetch_groups(
+    groups: list[KernelGroup],
+    directory: Path | None = None,
+    *,
+    upgrade: bool = False,
+) -> None:
     """Download every group's kernel if missing, then update the manifest.
 
     Skips downloads when the file is already on disk. Validates SHA256
     against the manifest entry if present (silent kernel swaps would
     otherwise be invisible).
+
+    With `upgrade=True`, deletes any *.bsp in the kernel directory that
+    isn't named by any group in the registry — orphaned files left behind
+    when we bump a kernel version (e.g., sat441 → sat459).
     """
     d = directory if directory is not None else kernel_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -66,11 +75,36 @@ def fetch_groups(groups: list[KernelGroup], directory: Path | None = None) -> No
         total_bytes += target.stat().st_size
         print(f"  {g.filename}: {actual_mb:.1f} MB, sha256 {sha[:12]}...")
 
+    if upgrade:
+        _prune_orphans(d, manifest)
+
     _write_manifest(manifest_path, manifest)
     if total_bytes:
         print(f"done. wrote {total_bytes / 1e6:.1f} MB to {d}")
     else:
         print(f"done. nothing to fetch; {d} already has every requested kernel.")
+
+
+def _prune_orphans(d: Path, manifest: dict[str, dict[str, Any]]) -> None:
+    """Delete .bsp files in `d` whose names aren't in any current registry
+    group. Updates the manifest in place to drop the stale entries.
+
+    Called only with --upgrade so a normal fetch never deletes anything.
+    """
+    from tomcosmos.kernels import ALL_GROUPS
+
+    valid_filenames = {g.filename for g in ALL_GROUPS}
+    freed = 0
+    for path in sorted(d.glob("*.bsp")):
+        if path.name in valid_filenames:
+            continue
+        size = path.stat().st_size
+        path.unlink()
+        manifest.pop(path.name, None)
+        freed += size
+        print(f"  pruned orphan: {path.name} ({size / 1e6:.1f} MB)")
+    if freed:
+        print(f"  freed {freed / 1e6:.1f} MB")
 
 
 def _download(url: str, dest: Path) -> None:

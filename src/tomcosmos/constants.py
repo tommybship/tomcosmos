@@ -49,11 +49,22 @@ _RAW: tuple[BodyConstant, ...] = (
     BodyConstant("rhea",     2.3065e21, 763.8,    "#BFBFBF", 605),
     BodyConstant("titan",    1.3452e23, 2574.7,   "#D8AB6E", 606),
     BodyConstant("iapetus",  1.8056e21, 734.5,    "#A28675", 608),
-    # Largest Uranian moon; SPICE IDs 7xx
+    # Largest Uranian moon; SPICE IDs 7xx (no NAIF-public satellite kernel —
+    # use explicit r/v ICs in scenarios until one becomes available).
     BodyConstant("titania",  3.4000e21, 788.9,    "#A8A89A", 703),
     BodyConstant("oberon",   3.0760e21, 761.4,    "#928579", 704),
     # Largest Neptunian moon; SPICE ID 8xx
     BodyConstant("triton",   2.1390e22, 1353.4,   "#D4C8B3", 801),
+    # Mars's moons; SPICE IDs 4xx
+    BodyConstant("phobos",   1.0659e16, 11.2667,  "#9C8770", 401),
+    BodyConstant("deimos",   1.4762e15, 6.2,      "#A99A82", 402),
+    # Pluto + Charon system; SPICE IDs 9xx
+    BodyConstant("pluto",    1.303e22,  1188.3,   "#B89F7B", 999, aliases=("pluto-center",)),
+    BodyConstant("charon",   1.586e21,  606.0,    "#928879", 901),
+    BodyConstant("nix",      4.5e16,    49.8,     "#BDB6A8", 902),
+    BodyConstant("hydra",    4.8e16,    50.9,     "#BDB6A8", 903),
+    BodyConstant("kerberos", 1.65e16,   19.0,     "#A89F90", 904),
+    BodyConstant("styx",     7.5e15,    16.0,     "#A89F90", 905),
 )
 
 BODY_CONSTANTS: dict[str, BodyConstant] = {b.name: b for b in _RAW}

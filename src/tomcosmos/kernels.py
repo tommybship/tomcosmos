@@ -51,6 +51,13 @@ BASE_GROUP = KernelGroup(
 # alongside a `pluto` / `mars-moons` group when first needed.
 SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
     KernelGroup(
+        name="mars",
+        filename="mar099.bsp",
+        url=f"{NAIF_BASE}/satellites/mar099.bsp",
+        approx_size_mb=1228.0,  # Phobos's 7-hr orbit needs dense Chebyshev coeffs
+        bodies=("phobos", "deimos"),
+    ),
+    KernelGroup(
         name="jupiter",
         filename="jup365.bsp",
         url=f"{NAIF_BASE}/satellites/jup365.bsp",
@@ -59,18 +66,25 @@ SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
     ),
     KernelGroup(
         name="saturn",
-        filename="sat441.bsp",
-        url=f"{NAIF_BASE}/satellites/sat441.bsp",
-        approx_size_mb=662.0,
+        filename="sat459.bsp",   # latest as of 2026-04 (was sat441; superseded)
+        url=f"{NAIF_BASE}/satellites/sat459.bsp",
+        approx_size_mb=84.0,
         bodies=("mimas", "enceladus", "tethys", "dione",
                 "rhea", "titan", "iapetus"),
     ),
     KernelGroup(
         name="neptune",
-        filename="nep097.bsp",
-        url=f"{NAIF_BASE}/satellites/nep097.bsp",
-        approx_size_mb=2.0,
+        filename="nep105.bsp",   # latest as of 2026-04 (was nep097; superseded)
+        url=f"{NAIF_BASE}/satellites/nep105.bsp",
+        approx_size_mb=210.0,
         bodies=("triton",),
+    ),
+    KernelGroup(
+        name="pluto",
+        filename="plu060.bsp",
+        url=f"{NAIF_BASE}/satellites/plu060.bsp",
+        approx_size_mb=135.0,
+        bodies=("pluto", "charon", "nix", "hydra", "kerberos", "styx"),
     ),
 )
 

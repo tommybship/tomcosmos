@@ -230,17 +230,34 @@ def view_cmd(
 def fetch_kernels_cmd(
     include: list[str] = typer.Option(
         [], "--include", "-i",
-        help="Add a kernel group: jupiter | saturn | uranus | neptune | all-moons. "
-             "Default (no --include) fetches just DE440s (~32 MB). Repeatable.",
+        help="Add a kernel group: mars | jupiter | saturn | neptune | pluto. "
+             "Default (no flags) fetches just DE440s (~32 MB). Repeatable.",
+    ),
+    fetch_all: bool = typer.Option(
+        False, "--all",
+        help="Fetch every group in the registry (base + all satellite kernels). "
+             "Currently ~3.4 GB total.",
+    ),
+    upgrade: bool = typer.Option(
+        False, "--upgrade",
+        help="After fetching, delete any kernel files in the kernel directory "
+             "that aren't named by any current registry group (e.g., sat441 "
+             "after we've moved to sat459). Manifest entries pruned alongside.",
     ),
 ) -> None:
     """Download NAIF kernels into the configured kernel directory.
 
     Default fetches DE440s (Sun + 8 planets + Moon, ~32 MB). Use
-    --include to add satellite groups (each is hundreds of MB to ~1 GB
-    — the prompt prints the size before downloading). Existing files
-    are skipped; SHA256 of every kernel is recorded in
-    manifest.json for reproducibility.
+    --include to add satellite groups (each is tens of MB to ~1 GB
+    — sizes printed before downloading). Existing files are skipped;
+    SHA256 of every kernel is recorded in manifest.json for
+    reproducibility.
+
+    --all is a shortcut for "every group in the registry."
+
+    --upgrade prunes stale kernel files left behind when we bump
+    a kernel version (e.g., sat441 → sat459) — only removes files
+    that aren't named by any current registry group.
     """
     from tomcosmos.kernel_fetch import fetch_groups
     from tomcosmos.kernels import (
@@ -254,23 +271,27 @@ def fetch_kernels_cmd(
     target.mkdir(parents=True, exist_ok=True)
     typer.echo(f"ensuring kernels in {target.resolve()}...")
 
-    groups = [BASE_GROUP]
-    for name in include:
-        if name == "all-moons":
-            groups = list(ALL_GROUPS)
-            break
-        try:
-            groups.append(group_by_name(name))
-        except KeyError:
-            _error(
-                f"unknown kernel group {name!r}. "
-                f"Known: base, all-moons, "
-                f"{', '.join(g.name for g in SATELLITE_GROUPS)}",
-                exit_code=2,
-            )
+    if fetch_all:
+        groups = list(ALL_GROUPS)
+    else:
+        groups = [BASE_GROUP]
+        for name in include:
+            # Backward compatibility: --include all-moons / all still works.
+            if name in ("all-moons", "all"):
+                groups = list(ALL_GROUPS)
+                break
+            try:
+                groups.append(group_by_name(name))
+            except KeyError:
+                _error(
+                    f"unknown kernel group {name!r}. "
+                    f"Known: {', '.join(g.name for g in SATELLITE_GROUPS)} "
+                    "(or use --all for every group)",
+                    exit_code=2,
+                )
 
     try:
-        fetch_groups(groups, directory=target)
+        fetch_groups(groups, directory=target, upgrade=upgrade)
     except Exception as e:  # noqa: BLE001 — network/OS
         _error(f"kernel fetch failed: {e}", exit_code=3)
 
