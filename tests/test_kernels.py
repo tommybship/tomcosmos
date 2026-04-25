@@ -34,7 +34,14 @@ def test_group_for_body_routes_correctly() -> None:
     assert group_for_body("io").name == "jupiter"
     assert group_for_body("titan").name == "saturn"
     assert group_for_body("triton").name == "neptune"
-    assert group_for_body("oberon").name == "uranus"
+
+
+def test_uranus_moons_have_no_kernel_group() -> None:
+    """NAIF's generic-kernels archive doesn't ship Uranus moon kernels.
+    Titania/Oberon stay in BODY_CONSTANTS for explicit-IC scenarios but
+    have no group to route them to."""
+    assert group_for_body("titania") is None
+    assert group_for_body("oberon") is None
 
 
 def test_group_for_unknown_body_returns_none() -> None:

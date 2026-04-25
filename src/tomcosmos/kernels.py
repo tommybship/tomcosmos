@@ -42,6 +42,13 @@ BASE_GROUP = KernelGroup(
 )
 
 # Optional satellite groups — opt-in via fetch-kernels --include <name>.
+# The set of available NAIF generic-kernel groups is narrower than you'd
+# guess: Uranus has no public satellite ephemeris in the generic-kernels
+# collection (Voyager-era data lives in PDS, not redistributable here),
+# so Titania/Oberon are reachable only via explicit r/v ICs in scenarios
+# until a kernel source surfaces. Pluto and Mars-moons are in the catalog
+# but we haven't added their bodies to BODY_CONSTANTS yet — easy to add
+# alongside a `pluto` / `mars-moons` group when first needed.
 SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
     KernelGroup(
         name="jupiter",
@@ -59,17 +66,10 @@ SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
                 "rhea", "titan", "iapetus"),
     ),
     KernelGroup(
-        name="uranus",
-        filename="ura111.bsp",
-        url=f"{NAIF_BASE}/satellites/ura111.bsp",
-        approx_size_mb=2.0,  # placeholder; refined when we actually fetch
-        bodies=("titania", "oberon"),
-    ),
-    KernelGroup(
         name="neptune",
         filename="nep097.bsp",
         url=f"{NAIF_BASE}/satellites/nep097.bsp",
-        approx_size_mb=2.0,  # placeholder
+        approx_size_mb=2.0,
         bodies=("triton",),
     ),
 )
