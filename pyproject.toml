@@ -65,6 +65,21 @@ ignore = ["E501"]
 # whitelist them so B008 doesn't flag every command definition.
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
+[tool.ruff.lint.per-file-ignores]
+# Physics code uses single-letter capital names that are textbook
+# convention (R for orbital radius, L for angular momentum, M for mean
+# anomaly, E for eccentric anomaly, G for gravitational constant, etc.).
+# Renaming them to lowercase would make the code harder to read against
+# any orbital-mechanics reference, so we exempt the physics modules
+# from N803/N806.
+"src/tomcosmos/state/ic.py"             = ["N803", "N806"]
+"src/tomcosmos/analysis/encounters.py"  = ["N803", "N806"]
+"src/tomcosmos/analysis/rotating_frame.py" = ["N803", "N806"]
+"tests/test_ic.py"                      = ["N803", "N806"]
+"tests/test_rotating_frame.py"          = ["N803", "N806"]
+"tests/test_dv_events.py"               = ["N803", "N806"]
+"tests/test_encounters.py"              = ["N803", "N806"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = false

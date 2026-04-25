@@ -5,12 +5,12 @@ Most of the heavy lifting lives in specialized modules (ephemeris
 query, IC resolution, REBOUND wrapper); this file stitches them
 together and owns the integration loop.
 
-As of part 6, `run()` captures RunMetadata and (optionally) writes a
-Parquet output. Output-path resolution follows PLAN.md > "Output paths":
-  - If `scenario.output.path` is set, use it (relative paths resolve
-    under `config.runs_dir()`).
-  - Otherwise default to `runs/<scenario_name>__<utc_iso_basic>.parquet`
-    so reruns of the same scenario don't silently overwrite.
+As of M4, the integration loop interleaves Δv burns with output
+samples: at each step, all burns due before the next sample are
+applied (integrate to burn time, modify particle velocity, continue),
+so an arbitrary number of impulses can land between any two samples
+without losing precision. The applied burns are recorded in the
+returned StateHistory's `events` log alongside Hill-sphere encounters.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import math
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import rebound
 from astropy import units as u
@@ -26,6 +27,8 @@ from tomcosmos.config import runs_dir
 from tomcosmos.io.diagnostics import RunMetadata, capture_metadata
 from tomcosmos.io.history import COLUMNS, StateHistory
 from tomcosmos.state.ephemeris import EphemerisSource, SkyfieldSource
+from tomcosmos.state.events import DeltaVEvent
+from tomcosmos.state.frames import ecliptic_to_icrf
 from tomcosmos.state.ic import (
     ResolvedBody,
     ResolvedTestParticle,
@@ -80,11 +83,33 @@ def run(
     sim = build_simulation(bodies, particles, scenario.integrator)
 
     sample_times_yr = _sample_grid(scenario)
+    burn_timeline = _build_burn_timeline(scenario)
     e0 = sim.energy()
 
     start = datetime.now(UTC)
     records: list[dict[str, object]] = []
+    dv_events: list[DeltaVEvent] = []
+    burn_idx = 0
     for sample_idx, t_yr in enumerate(sample_times_yr):
+        # Apply any burns scheduled at or before this sample time. We
+        # integrate to the burn time, modify the particle's velocity,
+        # then continue. This preserves the discontinuous-impulse model
+        # exactly across whfast / ias15 / mercurius.
+        while burn_idx < len(burn_timeline) and burn_timeline[burn_idx][0] <= t_yr:
+            t_burn_yr, name, dv_au_yr, dv_kms = burn_timeline[burn_idx]
+            sim.integrate(t_burn_yr)
+            p = sim.particles[rebound.hash(name)]
+            p.vx += float(dv_au_yr[0])
+            p.vy += float(dv_au_yr[1])
+            p.vz += float(dv_au_yr[2])
+            dv_events.append(DeltaVEvent(
+                sample_idx=sample_idx,
+                t_tdb=t_burn_yr * _YR_S,
+                particle=name,
+                dv_kms=(float(dv_kms[0]), float(dv_kms[1]), float(dv_kms[2])),
+            ))
+            burn_idx += 1
+
         sim.integrate(t_yr)
         rel_err = abs((sim.energy() - e0) / e0) if e0 != 0 else 0.0
         t_s = t_yr * _YR_S
@@ -123,7 +148,8 @@ def run(
     # keep the integration loop unaware of analysis. Sub-cadence flybys are
     # missed by construction — output cadence sets the resolution.
     from tomcosmos.analysis.encounters import detect_hill_encounters
-    events = detect_hill_encounters(history)
+    encounter_events = detect_hill_encounters(history)
+    events = _merge_event_logs(encounter_events, dv_events)
     history = StateHistory(
         df=df, scenario=scenario, body_names=all_names,
         metadata=metadata, events=events,
@@ -150,6 +176,57 @@ def resolve_output_path(scenario: Scenario, metadata: RunMetadata) -> Path:
         return p if p.is_absolute() else runs_dir() / p
     ts = datetime.fromisoformat(metadata.start_wallclock).strftime("%Y%m%dT%H%M%SZ")
     return runs_dir() / f"{scenario.name}__{ts}.parquet"
+
+
+def _build_burn_timeline(
+    scenario: Scenario,
+) -> list[tuple[float, str, np.ndarray, np.ndarray]]:
+    """Return `(t_yr, name, dv_au_per_yr, dv_kms)` tuples sorted by `t_yr`.
+
+    Burns are pulled from every body and test particle in the scenario,
+    transformed from their declared frame into ICRF, and converted from
+    km/s into REBOUND's AU/yr units in one pass. The original km/s
+    vector is preserved in the returned tuple for the event log so we
+    don't have to round-trip the conversion later.
+    """
+    burns: list[tuple[float, str, np.ndarray, np.ndarray]] = []
+    for entity in (*scenario.bodies, *scenario.test_particles):
+        for ev in entity.dv_events:
+            t_yr = float(ev.t_offset.to(u.yr).value)
+            dv_kms = np.asarray(ev.dv, dtype=np.float64)
+            dv_icrf = _dv_to_icrf(dv_kms, ev.frame)
+            dv_au_yr = dv_icrf / _AU_PER_YR_TO_KM_PER_S
+            burns.append((t_yr, entity.name, dv_au_yr, dv_icrf))
+    burns.sort(key=lambda b: b[0])
+    return burns
+
+
+def _dv_to_icrf(dv_kms: np.ndarray, frame: str) -> np.ndarray:
+    """Δv vectors are pure rotations of frame; the heliocentric/barycentric
+    distinction (origin shift) doesn't apply because Δv has no origin."""
+    if frame in ("icrf_barycentric", "icrf_heliocentric"):
+        return dv_kms
+    if frame in ("ecliptic_j2000_barycentric", "ecliptic_j2000_heliocentric"):
+        return ecliptic_to_icrf(dv_kms)
+    raise ValueError(f"unsupported dv frame: {frame!r}")
+
+
+def _merge_event_logs(
+    encounters: pd.DataFrame, dv_events: list[DeltaVEvent],
+) -> pd.DataFrame:
+    """Combine post-hoc encounter detections with the runner's dv log.
+
+    Returns a single events DataFrame sorted by (t_tdb, kind) so reads
+    can scan chronologically. Empty inputs are tolerated; the schema
+    is set by `_empty_events_df()` (called transitively from the
+    encounter detector) regardless of which side is empty."""
+    if not dv_events:
+        return encounters
+    dv_df = pd.DataFrame.from_records([ev.to_row() for ev in dv_events])
+    merged = dv_df if encounters.empty else pd.concat(
+        [encounters, dv_df], ignore_index=True,
+    )
+    return merged.sort_values(["t_tdb", "kind"]).reset_index(drop=True)
 
 
 def _sample_grid(scenario: Scenario) -> list[float]:

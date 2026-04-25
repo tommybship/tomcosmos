@@ -154,12 +154,32 @@ BodyIc = Annotated[
 ]
 
 
+class DeltaV(_StrictModel):
+    """Instantaneous velocity change applied to a body or test particle.
+
+    The integration loop walks the sorted timeline of all Δv events,
+    integrates to each `t_offset` (measured from `scenario.epoch`),
+    adds `dv` to the target's velocity, then resumes — REBOUND
+    handles the discontinuity correctly across all integrators.
+
+    `frame` matches the IC frames; the runtime applies the same
+    transform pipeline that resolves explicit ICs, so `(0, 0, 5)`
+    in `ecliptic_j2000_barycentric` is rotated by the obliquity
+    before being added to the particle's ICRF velocity.
+    """
+
+    t_offset: Duration
+    dv: tuple[float, float, float]
+    frame: Frame = "icrf_barycentric"
+
+
 class Body(_StrictModel):
     name: str = Field(min_length=1)
     spice_id: int | None = None
     mass_kg: float | None = Field(default=None, gt=0)
     radius_km: float | None = Field(default=None, gt=0)
     ic: BodyIc
+    dv_events: list[DeltaV] = Field(default_factory=list)
 
 
 class TestParticleExplicitIc(_StrictModel):
@@ -220,6 +240,7 @@ TestParticleIc = Annotated[
 class TestParticle(_StrictModel):
     name: str = Field(min_length=1)
     ic: TestParticleIc
+    dv_events: list[DeltaV] = Field(default_factory=list)
 
 
 class IntegratorConfig(_StrictModel):
@@ -278,6 +299,26 @@ class Scenario(_StrictModel):
             raise ValueError(
                 f"duplicate names across bodies/test_particles: {sorted(dupes)}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _dv_events_inside_duration(self) -> Scenario:
+        """Δv times must lie strictly inside (0, duration). t=0 burns are
+        better expressed by adjusting the IC velocity; t≥duration burns
+        never fire."""
+        duration_s = float(self.duration.to(u.s).value)
+        for entity_list, role in (
+            (self.bodies, "body"),
+            (self.test_particles, "test_particle"),
+        ):
+            for entity in entity_list:
+                for ev in entity.dv_events:
+                    t_s = float(ev.t_offset.to(u.s).value)
+                    if not (0.0 < t_s < duration_s):
+                        raise ValueError(
+                            f"{role} {entity.name!r}: dv event t_offset "
+                            f"{t_s} s must be in (0, {duration_s} s)"
+                        )
         return self
 
     @model_validator(mode="after")

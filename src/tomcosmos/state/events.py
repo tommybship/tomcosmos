@@ -18,11 +18,14 @@ from dataclasses import dataclass
 EVENT_COLUMNS: tuple[str, ...] = (
     "sample_idx",      # int64 — sample at which the event was detected
     "t_tdb",           # float64 — seconds since scenario.epoch (TDB)
-    "kind",            # string — "encounter_enter" | "encounter_exit" (more later)
-    "particle",        # string — name of the test particle (or moving body)
-    "body",            # string — name of the body whose Hill sphere is involved
-    "distance_km",     # float64 — particle-body separation at the sample
-    "hill_radius_km",  # float64 — body's Hill radius used for the threshold
+    "kind",            # string — encounter_enter | encounter_exit | delta_v
+    "particle",        # string — target particle / body
+    "body",            # string — body involved (encounter only; "" for delta_v)
+    "distance_km",     # float64 — particle-body separation (encounter only)
+    "hill_radius_km",  # float64 — body's Hill radius (encounter only)
+    "dv_x_kms",        # float64 — applied Δv x-component (delta_v only)
+    "dv_y_kms",        # float64 — applied Δv y-component (delta_v only)
+    "dv_z_kms",        # float64 — applied Δv z-component (delta_v only)
 )
 
 
@@ -53,4 +56,37 @@ class EncounterEvent:
             "body": self.body,
             "distance_km": self.distance_km,
             "hill_radius_km": self.hill_radius_km,
+            "dv_x_kms": float("nan"),
+            "dv_y_kms": float("nan"),
+            "dv_z_kms": float("nan"),
+        }
+
+
+@dataclass(frozen=True)
+class DeltaVEvent:
+    """One impulsive Δv burn applied during integration.
+
+    Emitted by the runner at the exact burn time (between output
+    samples), with `sample_idx` set to the *next* output sample so
+    the events sort consistently against encounter rows. The
+    distance/hill columns are nan for these rows.
+    """
+
+    sample_idx: int
+    t_tdb: float
+    particle: str
+    dv_kms: tuple[float, float, float]
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "sample_idx": self.sample_idx,
+            "t_tdb": self.t_tdb,
+            "kind": "delta_v",
+            "particle": self.particle,
+            "body": "",
+            "distance_km": float("nan"),
+            "hill_radius_km": float("nan"),
+            "dv_x_kms": float(self.dv_kms[0]),
+            "dv_y_kms": float(self.dv_kms[1]),
+            "dv_z_kms": float(self.dv_kms[2]),
         }

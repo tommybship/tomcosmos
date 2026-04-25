@@ -73,10 +73,10 @@ class EphemerisSource(ABC):
         reproducibility. Order is stable but otherwise unspecified.
         """
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027 — intentional no-op default; backends with global state override
         """Release any backend-global resources. Default: no-op."""
 
-    def __enter__(self) -> "EphemerisSource":
+    def __enter__(self) -> EphemerisSource:
         return self
 
     def __exit__(

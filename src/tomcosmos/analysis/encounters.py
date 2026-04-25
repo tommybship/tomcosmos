@@ -191,4 +191,7 @@ def _dtype_for(col: str) -> str:
         "body": "string",
         "distance_km": "float64",
         "hill_radius_km": "float64",
+        "dv_x_kms": "float64",
+        "dv_y_kms": "float64",
+        "dv_z_kms": "float64",
     }[col]

@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from astropy import units as u
 from astropy.time import Time
 
 from tomcosmos.constants import BodyConstant, resolve_body_constant

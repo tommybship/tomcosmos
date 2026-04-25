@@ -19,6 +19,7 @@ from tomcosmos.runner import run
 from tomcosmos.state.scenario import (
     SCHEMA_VERSION,
     Body,
+    DeltaV,
     EphemerisIc,
     ExplicitIc,
     IntegratorConfig,
@@ -36,6 +37,7 @@ __all__ = [
     "BODY_CONSTANTS",
     "Body",
     "BodyConstant",
+    "DeltaV",
     "DirtyWorkingTreeError",
     "EphemerisIc",
     "EphemerisOutOfRangeError",
