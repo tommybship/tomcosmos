@@ -62,16 +62,41 @@ class Viewer:
         *,
         scaling: Scaling = "log",
         follow: str | None = None,
+        rotating: tuple[str, str] | None = None,
         off_screen: bool = False,
     ) -> None:
         self._history = history
         self._scaling = scaling
         self._positions_au = _positions_by_body(history)
         self._body_names: tuple[str, ...] = tuple(self._positions_au.keys())
+        # Rotating-frame mode: pre-rotate every sample of every body into
+        # the (primary, secondary) corotating frame, then operate on the
+        # rotated arrays. Trails, body actors, labels, and `set_sample`
+        # all use _positions_au, so swapping it here is enough — the rest
+        # of the pipeline doesn't need to know which frame it's in.
+        if rotating is not None:
+            primary, secondary = rotating
+            for required in (primary, secondary):
+                if required not in self._positions_au:
+                    raise ValueError(
+                        f"rotating={rotating!r}: {required!r} not in StateHistory "
+                        f"bodies ({sorted(self._body_names)})"
+                    )
+            from tomcosmos.analysis.rotating_frame import (
+                rotate_history_to_corotating,
+            )
+            rotated_km = rotate_history_to_corotating(history, primary, secondary)
+            self._positions_au = {n: pts / _AU_KM for n, pts in rotated_km.items()}
+        self._rotating = rotating
         if follow is not None and follow not in self._positions_au:
             raise ValueError(
                 f"follow={follow!r} not in StateHistory bodies "
                 f"({sorted(self._body_names)})"
+            )
+        if rotating is not None and follow is not None:
+            raise ValueError(
+                "follow and rotating cannot be combined; rotating already keeps "
+                "the secondary fixed in the viewport"
             )
         self._follow = follow
         self._n_samples = history.n_samples

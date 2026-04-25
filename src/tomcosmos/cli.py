@@ -210,9 +210,26 @@ def view_cmd(
         help="Body name to keep centered in the viewport while time scrubs. "
              "Useful for watching moons orbit their primary (e.g., --follow jupiter).",
     ),
+    rotating: str | None = typer.Option(
+        None, "--rotating",
+        help="Render in the rotating frame of two bodies, given as "
+             "'primary,secondary' (e.g. --rotating sun,earth). The secondary "
+             "stays fixed in the viewport; tadpole / horseshoe orbits become "
+             "visible. Cannot be combined with --follow.",
+    ),
 ) -> None:
     """Open a 3D viewer on a run's Parquet file."""
     from tomcosmos.viz.pyvista_viewer import Viewer
+
+    rotating_pair: tuple[str, str] | None = None
+    if rotating is not None:
+        parts = [p.strip() for p in rotating.split(",")]
+        if len(parts) != 2 or not all(parts):
+            _error(
+                f"--rotating must be 'primary,secondary'; got {rotating!r}",
+                exit_code=2,
+            )
+        rotating_pair = (parts[0], parts[1])
 
     try:
         history = StateHistory.from_parquet(parquet_path)
@@ -220,7 +237,9 @@ def view_cmd(
         _error(str(e), exit_code=5)
 
     try:
-        viewer = Viewer(history, scaling=scaling, follow=follow)  # type: ignore[arg-type]
+        viewer = Viewer(  # type: ignore[arg-type]
+            history, scaling=scaling, follow=follow, rotating=rotating_pair,
+        )
     except ValueError as e:
         _error(str(e), exit_code=2)
     viewer.show()

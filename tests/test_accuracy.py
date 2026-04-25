@@ -186,3 +186,36 @@ def test_ias15_jupiter_galileans_energy_under_1e_minus_12_over_10_years(
     history = run(scenario, source=skyfield_source)
     max_err = float(history.df["energy_rel_err"].max())
     assert max_err < 1e-12, f"Jupiter+Galileans |ΔE/E| over 10 yr: {max_err:.3e}"
+
+
+# --- M3 exit criterion #3: Sun-Earth L4 tadpole stays bounded over 50 yr ----
+
+
+def test_l4_tadpole_within_10_degrees_over_50_years(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """A test particle at Sun-Earth L4 should librate stably around the
+    equilibrium for the entire integration window. PLAN.md M3 exit
+    criterion #3: stays within ±10° in the Sun-Earth rotating frame.
+
+    Empirically the libration is ~0.2° peak over 50 yr — three orders
+    of magnitude tighter than the criterion bound. The wide bound
+    catches integrator divergence or wrong-frame transformations
+    without flapping on real-world Earth-eccentricity wobbles."""
+    from tomcosmos.analysis.rotating_frame import (
+        angular_position_relative_to,
+        rotate_history_to_corotating,
+    )
+
+    scenario = Scenario.from_yaml("scenarios/sun-earth-l4-tadpole.yaml")
+    history = run(scenario, source=skyfield_source)
+    rotated = rotate_history_to_corotating(
+        history, primary="sun", secondary="earth",
+    )
+    delta_deg = angular_position_relative_to(
+        rotated, particle="l4-trojan", reference_angle_deg=60.0,
+    )
+    max_libration = float(np.max(np.abs(delta_deg)))
+    assert max_libration < 10.0, (
+        f"L4 tadpole left ±10° envelope: peak libration {max_libration:.3f}°"
+    )

@@ -1,0 +1,29 @@
+schema_version: 1
+name: sun-earth-l4-tadpole
+# Demonstrates that a test particle placed exactly at Sun-Earth L4 librates
+# in a stable tadpole around the equilibrium. Real Trojan asteroids occupy
+# tadpole orbits at L4 / L5 of giant-planet systems; the same dynamics work
+# for Sun-Earth at smaller amplitude. The tadpole is visible in the rotating
+# frame (analysis.rotating_frame); in the inertial frame the particle just
+# tracks Earth's orbit at a 60° offset.
+#
+# IAS15 because Earth's eccentricity (0.0167) plus the L4 corotation pulls
+# the system away from the cleanest WHFast regime — the adaptive solver
+# absorbs the year-scale wobbles without phase aliasing.
+epoch: "2026-01-01T00:00:00 TDB"
+duration: "50 yr"
+integrator:
+  name: ias15
+output:
+  format: parquet
+  cadence: "30 day"   # 600 samples over 50 yr — dense enough to see the libration
+bodies:
+  - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
+  - { name: earth, spice_id: 399, ic: { source: ephemeris } }
+test_particles:
+  - name: l4-trojan
+    ic:
+      type: lagrange
+      point: L4
+      primary: sun
+      secondary: earth
