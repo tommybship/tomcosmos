@@ -64,19 +64,28 @@ SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
         approx_size_mb=1137.0,
         bodies=("io", "europa", "ganymede", "callisto"),
     ),
+    # NAIF's higher-numbered sat/nep files (sat45x, nep10x) are NOT
+    # newer versions of sat441 / nep097 — they're complementary catalogs
+    # of newly-discovered irregular satellites that *require* the base
+    # major-moon kernel to also be loaded. sat459 ships only seven
+    # 2020-2023 irregulars (NAIF 65297-65303); nep105 ships only
+    # Nereid (802). Both omit the bodies M2 actually wants.
     KernelGroup(
         name="saturn",
-        filename="sat459.bsp",   # latest as of 2026-04 (was sat441; superseded)
-        url=f"{NAIF_BASE}/satellites/sat459.bsp",
-        approx_size_mb=84.0,
+        filename="sat441.bsp",   # major moons: 601-609 + 612-634 + Saturn (699)
+        url=f"{NAIF_BASE}/satellites/sat441.bsp",
+        approx_size_mb=631.0,
+        # Restricted to bodies present in BODY_CONSTANTS today; sat441 also
+        # carries Hyperion (607), Phoebe (609), Helene/Telesto/Calypso/
+        # Methone/Polydeuces (612-634). Add their constants when first needed.
         bodies=("mimas", "enceladus", "tethys", "dione",
                 "rhea", "titan", "iapetus"),
     ),
     KernelGroup(
         name="neptune",
-        filename="nep105.bsp",   # latest as of 2026-04 (was nep097; superseded)
-        url=f"{NAIF_BASE}/satellites/nep105.bsp",
-        approx_size_mb=210.0,
+        filename="nep097.bsp",   # Triton (801) + Neptune (899)
+        url=f"{NAIF_BASE}/satellites/nep097.bsp",
+        approx_size_mb=100.0,
         bodies=("triton",),
     ),
     KernelGroup(

@@ -241,8 +241,9 @@ def fetch_kernels_cmd(
     upgrade: bool = typer.Option(
         False, "--upgrade",
         help="After fetching, delete any kernel files in the kernel directory "
-             "that aren't named by any current registry group (e.g., sat441 "
-             "after we've moved to sat459). Manifest entries pruned alongside.",
+             "that aren't named by any current registry group. Useful after a "
+             "registry change replaces one kernel filename with another. "
+             "Manifest entries pruned alongside.",
     ),
 ) -> None:
     """Download NAIF kernels into the configured kernel directory.
@@ -255,9 +256,9 @@ def fetch_kernels_cmd(
 
     --all is a shortcut for "every group in the registry."
 
-    --upgrade prunes stale kernel files left behind when we bump
-    a kernel version (e.g., sat441 → sat459) — only removes files
-    that aren't named by any current registry group.
+    --upgrade prunes stale kernel files left behind when the registry
+    is changed — only removes files that aren't named by any current
+    registry group.
     """
     from tomcosmos.kernel_fetch import fetch_groups
     from tomcosmos.kernels import (

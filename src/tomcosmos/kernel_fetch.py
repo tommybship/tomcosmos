@@ -37,7 +37,7 @@ def fetch_groups(
 
     With `upgrade=True`, deletes any *.bsp in the kernel directory that
     isn't named by any group in the registry — orphaned files left behind
-    when we bump a kernel version (e.g., sat441 → sat459).
+    when the registry is changed.
     """
     d = directory if directory is not None else kernel_dir()
     d.mkdir(parents=True, exist_ok=True)
