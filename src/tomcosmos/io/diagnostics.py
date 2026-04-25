@@ -160,19 +160,16 @@ def _git_state(repo_root: Path | None) -> tuple[str | None, bool]:
 def _kernel_hashes(source: EphemerisSource) -> dict[str, str]:
     """SHA256 of every kernel file the source has loaded.
 
-    SkyfieldSource exposes `kernel_path`; other backends grow the same
-    or a `kernel_paths()` method when M2 needs multiple files. Accessing
-    `kernel_path` goes through a property, which can raise on test
-    stubs that don't fully initialize — swallow that and report empty.
+    Accessing `kernel_paths` is part of the EphemerisSource contract,
+    but test stubs sometimes don't initialize fully — swallow attribute
+    errors and report an empty dict in that case rather than blowing
+    up metadata capture.
     """
-    paths: list[Path] = []
     try:
-        maybe_path = source.kernel_path  # type: ignore[attr-defined]
-    except AttributeError:
-        maybe_path = None
-    if isinstance(maybe_path, Path) and maybe_path.exists():
-        paths.append(maybe_path)
-    return {p.name: _sha256_file(p) for p in paths}
+        paths = tuple(source.kernel_paths)
+    except (AttributeError, NotImplementedError):
+        return {}
+    return {p.name: _sha256_file(p) for p in paths if p.exists()}
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
