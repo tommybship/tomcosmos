@@ -1,0 +1,17 @@
+schema_version: 1
+name: earth-moon
+# 1-month integration showcasing the Earth-Moon system.
+# Uses IAS15 because the Moon's 27-day orbit + 1-day timestep
+# is borderline for WHFast; IAS15 is adaptive and handles it cleanly.
+# Default DE440s kernel (32 MB) covers everything — no extra fetch needed.
+epoch: "2026-04-23T00:00:00 TDB"
+duration: "30 day"
+integrator:
+  name: ias15
+output:
+  format: parquet
+  cadence: "1 day"
+bodies:
+  - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
+  - { name: earth, spice_id: 399, ic: { source: ephemeris } }
+  - { name: moon,  spice_id: 301, ic: { source: ephemeris } }

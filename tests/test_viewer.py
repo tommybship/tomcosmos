@@ -113,3 +113,53 @@ def test_screenshot_writes_png(tmp_path: Path) -> None:
     viewer.screenshot(str(out))
     assert out.exists()
     assert out.stat().st_size > 1000  # non-trivial PNG
+
+
+# --- Follow-body camera (M2c) -----------------------------------------------
+
+
+def test_follow_body_constructs() -> None:
+    from tomcosmos.viz.pyvista_viewer import Viewer
+    history = _fresh_history()
+    viewer = Viewer(history, follow="earth", off_screen=True)
+    assert viewer._follow == "earth"  # noqa: SLF001
+
+
+def test_follow_unknown_body_rejected() -> None:
+    from tomcosmos.viz.pyvista_viewer import Viewer
+    history = _fresh_history()
+    with pytest.raises(ValueError, match="not in StateHistory bodies"):
+        Viewer(history, follow="ganymede", off_screen=True)
+
+
+def test_follow_camera_focal_point_tracks_body() -> None:
+    """As the slider scrubs, the camera's focal point should follow the
+    target body — that's what 'follow' does."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+    history = _fresh_history()
+    viewer = Viewer(history, follow="earth", off_screen=True)
+
+    viewer.set_sample(0)
+    focal_0 = np.array(viewer._plotter.camera.focal_point)  # noqa: SLF001
+    earth_0 = viewer._positions_au["earth"][0]  # noqa: SLF001
+    assert np.allclose(focal_0, earth_0, atol=1e-9)
+
+    last_idx = history.n_samples - 1
+    viewer.set_sample(last_idx)
+    focal_last = np.array(viewer._plotter.camera.focal_point)  # noqa: SLF001
+    earth_last = viewer._positions_au["earth"][last_idx]  # noqa: SLF001
+    assert np.allclose(focal_last, earth_last, atol=1e-9)
+    # The focal point actually moved (not stuck at origin like default mode).
+    assert not np.allclose(focal_0, focal_last)
+
+
+def test_follow_camera_does_not_apply_in_default_mode() -> None:
+    """Without follow, the focal point stays at the SSB origin throughout."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+    history = _fresh_history()
+    viewer = Viewer(history, off_screen=True)
+    viewer.set_sample(0)
+    focal_0 = np.array(viewer._plotter.camera.focal_point)  # noqa: SLF001
+    viewer.set_sample(history.n_samples - 1)
+    focal_last = np.array(viewer._plotter.camera.focal_point)  # noqa: SLF001
+    assert np.allclose(focal_0, focal_last)

@@ -1,0 +1,23 @@
+schema_version: 1
+name: jupiter-galileans
+# Jupiter + the four Galilean moons, 30 days. Io's period is 1.77 days,
+# so the integrator must adapt — IAS15 handles this cleanly. WHFast at
+# 1-day step would alias Io's orbit completely.
+#
+# Requires the Jovian-system kernel:
+#   tomcosmos fetch-kernels --include jupiter
+# (~1.1 GB one-time download from NAIF.)
+epoch: "2026-04-23T00:00:00 TDB"
+duration: "30 day"
+integrator:
+  name: ias15
+output:
+  format: parquet
+  cadence: "0.1 day"   # tight cadence so Io's 1.77-day orbit is well-sampled
+bodies:
+  - { name: sun,      spice_id: 10,  ic: { source: ephemeris } }
+  - { name: jupiter,  spice_id: 599, ic: { source: ephemeris } }
+  - { name: io,       spice_id: 501, ic: { source: ephemeris } }
+  - { name: europa,   spice_id: 502, ic: { source: ephemeris } }
+  - { name: ganymede, spice_id: 503, ic: { source: ephemeris } }
+  - { name: callisto, spice_id: 504, ic: { source: ephemeris } }

@@ -205,6 +205,11 @@ def view_cmd(
         "log", "--scaling",
         help="Body scaling: 'log' (default), 'true', or 'marker'.",
     ),
+    follow: str | None = typer.Option(
+        None, "--follow",
+        help="Body name to keep centered in the viewport while time scrubs. "
+             "Useful for watching moons orbit their primary (e.g., --follow jupiter).",
+    ),
 ) -> None:
     """Open a 3D viewer on a run's Parquet file."""
     from tomcosmos.viz.pyvista_viewer import Viewer
@@ -215,7 +220,7 @@ def view_cmd(
         _error(str(e), exit_code=5)
 
     try:
-        viewer = Viewer(history, scaling=scaling)  # type: ignore[arg-type]
+        viewer = Viewer(history, scaling=scaling, follow=follow)  # type: ignore[arg-type]
     except ValueError as e:
         _error(str(e), exit_code=2)
     viewer.show()

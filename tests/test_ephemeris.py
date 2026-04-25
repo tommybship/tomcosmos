@@ -5,6 +5,8 @@ to be present (the `skyfield_source` fixture will skip otherwise).
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from astropy import units as u
@@ -106,18 +108,25 @@ def test_unknown_body_raises(skyfield_source: SkyfieldSource) -> None:
 
 
 def test_galilean_query_without_kernel_says_how_to_install(
-    skyfield_source: SkyfieldSource,
+    skyfield_source: SkyfieldSource, kernel_dir: Path,
 ) -> None:
     """When jup365.bsp isn't present, asking for Io should fail with a
-    clear instruction to fetch the right kernel — not a generic error."""
+    clear instruction to fetch the right kernel — not a generic error.
+
+    Skipped when jup365.bsp IS loaded; the missing-kernel error path
+    is what we're testing here, not the success path (covered elsewhere)."""
+    if (kernel_dir / "jup365.bsp").exists():
+        pytest.skip("jup365.bsp present; can't exercise missing-kernel error")
     t = Time("2026-04-23T00:00:00", scale="tdb")
     with pytest.raises(UnknownBodyError, match=r"jup.*\.bsp|fetch-kernels --include jupiter"):
         skyfield_source.query("io", t)
 
 
 def test_titan_query_without_kernel_says_how_to_install(
-    skyfield_source: SkyfieldSource,
+    skyfield_source: SkyfieldSource, kernel_dir: Path,
 ) -> None:
+    if (kernel_dir / "sat441.bsp").exists():
+        pytest.skip("sat441.bsp present; can't exercise missing-kernel error")
     t = Time("2026-04-23T00:00:00", scale="tdb")
     with pytest.raises(UnknownBodyError, match=r"sat.*\.bsp|fetch-kernels --include saturn"):
         skyfield_source.query("titan", t)

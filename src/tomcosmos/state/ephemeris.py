@@ -216,19 +216,30 @@ class SkyfieldSource(EphemerisSource):
         return tuple(out)
 
     def time_range(self) -> tuple[Time, Time]:
-        starts: list[float] = []
-        ends: list[float] = []
+        # Per-kernel span = (min start_jd, max end_jd) across that kernel's
+        # segments. Multi-piece kernels (e.g., jup365 has segments that join
+        # at boundary epochs) are unioned within a kernel — we trust skyfield
+        # to pick the right segment at query time. The cross-kernel result
+        # is then the *intersection* of per-kernel spans, since each body
+        # we'd query lives in exactly one kernel and we need every queried
+        # body to be covered.
+        per_kernel_spans: list[tuple[float, float]] = []
         for kernel in self._kernels.values():
-            for seg in kernel.spk.segments:
-                starts.append(seg.start_jd)
-                ends.append(seg.end_jd)
-        if not starts:
+            segs = kernel.spk.segments
+            if not segs:
+                continue
+            per_kernel_spans.append(
+                (min(s.start_jd for s in segs), max(s.end_jd for s in segs))
+            )
+        if not per_kernel_spans:
             raise RuntimeError(
                 f"no SPK segments found across {len(self._kernels)} loaded kernels"
             )
+        start_jd = max(span[0] for span in per_kernel_spans)
+        end_jd = min(span[1] for span in per_kernel_spans)
         return (
-            Time(max(starts), format="jd", scale="tdb"),
-            Time(min(ends), format="jd", scale="tdb"),
+            Time(start_jd, format="jd", scale="tdb"),
+            Time(end_jd, format="jd", scale="tdb"),
         )
 
     # ------------------------------------------------------------------

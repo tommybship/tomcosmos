@@ -60,12 +60,19 @@ class Viewer:
         history: StateHistory,
         *,
         scaling: Scaling = "log",
+        follow: str | None = None,
         off_screen: bool = False,
     ) -> None:
         self._history = history
         self._scaling = scaling
         self._positions_au = _positions_by_body(history)
         self._body_names: tuple[str, ...] = tuple(self._positions_au.keys())
+        if follow is not None and follow not in self._positions_au:
+            raise ValueError(
+                f"follow={follow!r} not in StateHistory bodies "
+                f"({sorted(self._body_names)})"
+            )
+        self._follow = follow
         self._n_samples = history.n_samples
         self._current_sample = 0
         self._plotter = pv.Plotter(off_screen=off_screen, title="tomcosmos")
@@ -95,10 +102,26 @@ class Viewer:
         if not (0 <= sample_idx < self._n_samples):
             raise IndexError(
                 f"sample_idx {sample_idx} out of range [0, {self._n_samples - 1}]"
-            )
+                )
         for name, actor in self._body_actors.items():
             pos = self._positions_au[name][sample_idx]
             actor.SetPosition(float(pos[0]), float(pos[1]), float(pos[2]))
+        # Follow-body camera: re-center the focal point on the followed body
+        # each frame so it stays fixed in the viewport while everything else
+        # moves around it. Without this, the camera stays at SSB and the
+        # followed body slides out of frame.
+        if self._follow is not None:
+            target = self._positions_au[self._follow][sample_idx]
+            cam = self._plotter.camera
+            # Preserve the camera offset from the previous focal point
+            # so the user's interactive rotation/zoom is retained.
+            old_focal = np.array(cam.focal_point, dtype=np.float64)
+            old_pos = np.array(cam.position, dtype=np.float64)
+            offset = old_pos - old_focal
+            new_focal = np.array(target, dtype=np.float64)
+            cam.focal_point = (float(new_focal[0]), float(new_focal[1]), float(new_focal[2]))
+            new_pos = new_focal + offset
+            cam.position = (float(new_pos[0]), float(new_pos[1]), float(new_pos[2]))
         self._current_sample = sample_idx
 
     # --- Scene construction ---------------------------------------------
@@ -156,7 +179,49 @@ class Viewer:
         solar-system layout: perspective makes Neptune look smaller than
         Jupiter at the same display scale, and it clips the outer
         planets when the inner system is centered.
+
+        In follow-body mode, the focal point centers on the followed
+        body's t=0 position and the parallel scale is chosen from the
+        spread of *other* bodies in the followed body's neighborhood,
+        not from absolute distance to SSB. This makes a Galilean
+        moon's orbit around Jupiter visible at appropriate zoom.
         """
+        if self._follow is not None:
+            follow_t0 = self._positions_au[self._follow][0]
+            # Per-body MAX distance from the followed body over the run. A
+            # good camera scale is "the cohort of bodies that orbit the
+            # followed body" — Earth-Moon for `follow=earth`, Galileans for
+            # `follow=jupiter`. We want to exclude distant primaries like
+            # the Sun when following a planet.
+            n_probe = min(self._n_samples, 32)
+            sample_idxs = np.linspace(0, self._n_samples - 1, n_probe, dtype=int)
+            follow_pts = self._positions_au[self._follow]
+            per_body_max: list[float] = []
+            for name, pts in self._positions_au.items():
+                if name == self._follow:
+                    continue
+                d = float(max(np.linalg.norm(pts[i] - follow_pts[i]) for i in sample_idxs))
+                per_body_max.append(d)
+            if per_body_max:
+                # The closest body sets the floor. Include bodies up to 5x
+                # that floor — i.e., the followed body's tight neighborhood.
+                # Anything farther (typically the central star or distant
+                # planet) gets cropped from the framing, even though it's
+                # still rendered in the scene.
+                closest = min(per_body_max)
+                cohort = [d for d in per_body_max if d <= closest * 5.0]
+                spread = max(cohort)
+            else:
+                spread = 0.05  # fallback when only the followed body is in scene
+            self._plotter.camera_position = [
+                (float(follow_t0[0]), float(follow_t0[1]), float(follow_t0[2]) + spread * 3.0),
+                (float(follow_t0[0]), float(follow_t0[1]), float(follow_t0[2])),
+                (0.0, 1.0, 0.0),
+            ]
+            self._plotter.enable_parallel_projection()  # type: ignore[call-arg]
+            self._plotter.camera.parallel_scale = spread * 1.5
+            return
+
         max_r = max(
             float(np.linalg.norm(pts, axis=1).max())
             for pts in self._positions_au.values()
