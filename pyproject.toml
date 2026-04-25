@@ -24,7 +24,8 @@ dependencies = [
     "structlog>=24,<26",
     "pyarrow>=15,<20",
     "pandas>=2.2,<3",
-    "pyvista>=0.43,<1",
+    "pyvista==0.43.10",
+    "vtk==9.3.1",
     "trame>=3.5,<4",
 ]
 

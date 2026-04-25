@@ -18,7 +18,11 @@ dependencies:
   - structlog>=24,<26
   - pyarrow>=15,<20
   - pandas>=2.2,<3
-  - pyvista>=0.43,<1
+  # Slider + label-tracking verified on this exact pair. Bump only after
+  # re-running tests/test_viewer.py and `tomcosmos view` against a real
+  # parquet — pyvista has had slider regressions on newer releases.
+  - pyvista=0.43.10
+  - vtk=9.3.1
   - trame>=3.5,<4
   # dev
   - pytest>=8,<9

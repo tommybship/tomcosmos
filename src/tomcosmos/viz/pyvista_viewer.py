@@ -24,6 +24,7 @@ from typing import Literal
 
 import numpy as np
 import pyvista as pv
+import vtk
 from astropy import units as u
 
 from tomcosmos.constants import resolve_body_constant
@@ -77,6 +78,7 @@ class Viewer:
         self._current_sample = 0
         self._plotter = pv.Plotter(off_screen=off_screen, title="tomcosmos")
         self._body_actors: dict[str, pv.Actor] = {}
+        self._label_polydata: pv.PolyData | None = None
         self._build_scene()
 
     # --- Public surface --------------------------------------------------
@@ -105,7 +107,12 @@ class Viewer:
                 )
         for name, actor in self._body_actors.items():
             pos = self._positions_au[name][sample_idx]
-            actor.SetPosition(float(pos[0]), float(pos[1]), float(pos[2]))
+            actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
+        if self._label_polydata is not None:
+            self._label_polydata.points = np.array(
+                [self._positions_au[n][sample_idx] for n in self._body_names],
+                dtype=np.float64,
+            )
         # Follow-body camera: re-center the focal point on the followed body
         # each frame so it stays fixed in the viewport while everything else
         # moves around it. Without this, the camera stays at SSB and the
@@ -153,22 +160,34 @@ class Viewer:
             actor = self._plotter.add_mesh(
                 sphere, color=_color_for(name), smooth_shading=True,
             )
-            actor.SetPosition(float(pts[0, 0]), float(pts[0, 1]), float(pts[0, 2]))
+            actor.position = (float(pts[0, 0]), float(pts[0, 1]), float(pts[0, 2]))
             self._body_actors[name] = actor
 
     def _add_labels(self) -> None:
-        """Body-name labels floating near each body at t=0.
+        """Body-name labels that track each body as the slider scrubs.
 
-        Labels are static (anchored to sample 0) — moving them with the
-        slider doubles the per-update work and clutters the scene when
-        bodies cluster. Users identify via color + trail when scrubbing.
+        We attach labels as a point-data string array and pass its
+        *name* to `add_point_labels`. Pyvista's list-of-labels path
+        deep-copies the input polydata, which would freeze the labels;
+        the named-array path keeps the dataset by reference, so
+        `set_sample` can mutate `_label_polydata.points` and the label
+        hierarchy follows on the next render. Anchor dots are
+        suppressed — the body sphere is the only marker.
         """
-        points = np.array([self._positions_au[n][0] for n in self._body_names])
-        labels = list(self._body_names)
+        points = np.array(
+            [self._positions_au[n][0] for n in self._body_names],
+            dtype=np.float64,
+        )
+        self._label_polydata = pv.PolyData(points)
+        labels_arr = vtk.vtkStringArray()
+        labels_arr.SetName("labels")
+        for name in self._body_names:
+            labels_arr.InsertNextValue(name)
+        self._label_polydata.GetPointData().AddArray(labels_arr)
         self._plotter.add_point_labels(
-            points, labels,
+            self._label_polydata, "labels",
             font_size=12, text_color="white",
-            point_size=0, shape=None, always_visible=True,
+            shape=None, always_visible=True, show_points=False,
         )
 
     def _set_top_down_camera(self) -> None:
@@ -248,6 +267,7 @@ class Viewer:
             title="sample",
             pointa=(0.1, 0.05), pointb=(0.9, 0.05),
             style="modern",
+            interaction_event="always",
         )
 
 
