@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import rebound
 from astropy import units as u
+from astropy.time import Time
 
 from tomcosmos import IntegratorConfig, Scenario
 from tomcosmos.state.ephemeris import SkyfieldSource
@@ -243,3 +244,86 @@ def test_sun_planets_scenario_builds_and_integrates(
     e1 = sim.energy()
     # Sun + 8 planets, 1 day step, 1 year: symplectic — energy bounded.
     assert abs((e1 - e0) / e0) < 1e-6
+
+
+# --- M4 exit criterion #2: MERCURIUS handles close encounters ---------------
+
+
+@pytest.mark.ephemeris
+def test_mercurius_handles_earth_hill_sphere_flyby_without_blowup(
+    skyfield_source: SkyfieldSource,
+) -> None:
+    """A small massive probe on a trajectory that passes through Earth's
+    Hill sphere should not destabilize MERCURIUS.
+
+    MERCURIUS is the integrator that exists *for* this case: WHFast
+    can't handle close encounters at all (its symplectic structure
+    breaks down near the singularity), and IAS15 handles them but
+    pays the cost across the entire run. MERCURIUS uses WHFast in the
+    far field and switches to BS (high-order non-symplectic) inside
+    `r_crit_hill` of any massive particle.
+
+    Asserted invariants (M4 #2 "no numerical blowup"):
+      - No NaN/inf in any state column.
+      - Energy stays bounded across the encounter — a 1e-3 ceiling is
+        well above MERCURIUS's typical ~1e-6 for a single Hill passage,
+        but well below "blowup" magnitude.
+      - The flyby actually occurred (probe came within Earth's Hill
+        radius at some sample) — sanity check that we're testing what
+        we claim, not just integrating in deep space.
+    """
+    from tomcosmos import Body, ExplicitIc, OutputConfig
+    from tomcosmos.runner import run
+
+    epoch = Time("2026-04-23T00:00:00", scale="tdb")
+    r_earth, v_earth = skyfield_source.query("earth", epoch)
+    # Probe starts 5e6 km from Earth (above Hill ~1.5e6 km), closing at
+    # 10 km/s. Same geometry as the M3 encounter test, validated to
+    # produce a Hill-crossing within ~5 days.
+    r_probe = tuple((r_earth + np.array([5.0e6, 0.0, 0.0])).tolist())
+    v_probe = tuple((v_earth + np.array([-10.0, 0.0, 0.0])).tolist())
+
+    scenario = Scenario(
+        schema_version=1, name="mercurius-flyby",
+        epoch=epoch,
+        duration=30.0 * u.day,
+        integrator=IntegratorConfig(
+            name="mercurius",
+            timestep=0.5 * u.day,  # WHFast-tier far-field cadence
+        ),
+        output=OutputConfig(format="parquet", cadence=0.5 * u.day),
+        bodies=[
+            Body(name="sun",   spice_id=10,  ic={"source": "ephemeris"}),
+            Body(name="earth", spice_id=399, ic={"source": "ephemeris"}),
+            Body(
+                name="probe",
+                mass_kg=1.0e3, radius_km=1.0,
+                ic=ExplicitIc(source="explicit", r=r_probe, v=v_probe),
+            ),
+        ],
+    )
+    history = run(scenario, source=skyfield_source)
+
+    # No NaN / inf in any state column.
+    state_cols = ["x", "y", "z", "vx", "vy", "vz"]
+    state = history.df[state_cols].to_numpy(dtype=float)
+    assert np.all(np.isfinite(state)), "found NaN/inf state — MERCURIUS blew up"
+
+    # Energy bounded.
+    max_err = float(history.df["energy_rel_err"].max())
+    assert max_err < 1e-3, (
+        f"|ΔE/E| max = {max_err:.3e} exceeds 1e-3 — MERCURIUS handover unstable"
+    )
+
+    # Setup sanity: flyby actually crossed Earth's Hill sphere.
+    earth_pos = history.df[history.df["body"] == "earth"][
+        ["sample_idx", "x", "y", "z"]
+    ].sort_values("sample_idx")[["x", "y", "z"]].to_numpy()
+    probe_pos = history.df[history.df["body"] == "probe"][
+        ["sample_idx", "x", "y", "z"]
+    ].sort_values("sample_idx")[["x", "y", "z"]].to_numpy()
+    min_d = float(np.linalg.norm(probe_pos - earth_pos, axis=1).min())
+    assert min_d < 1.5e6, (
+        f"flyby did not cross Earth's Hill sphere (min distance {min_d:.3e} km); "
+        "test setup is wrong, not MERCURIUS"
+    )
