@@ -10,6 +10,10 @@ data/kernels/
 # Simulation outputs
 runs/
 
+# Cached external-API responses (Horizons state vectors, etc.). Safe
+# to delete; contents are deterministic and re-fetchable on demand.
+data/cache/
+
 # Python
 __pycache__/
 *.py[cod]

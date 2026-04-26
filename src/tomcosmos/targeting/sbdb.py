@@ -139,6 +139,33 @@ def state_at_epoch(
     return r_helio_icrf + r_sun, v_helio_icrf + v_sun
 
 
+def bulk_states_at_epoch(
+    designations: list[str],
+    target_epoch: Time,
+    source: EphemerisSource,
+) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """Bulk variant: SBDB-query each designation, Kepler-propagate to
+    `target_epoch`, return `(target_name, r_km, v_kms)` tuples in
+    request order.
+
+    `target_name` is what SBDB's `object.fullname` reports — useful
+    for the scenario-builder code so the test particle's name reflects
+    JPL's canonical form (e.g. "99942 Apophis (2004 MN4)") rather
+    than whatever shorthand the user typed.
+
+    No bulk SBDB endpoint exists for orbit elements, so this is a
+    sequential `query` loop — but SBDB queries are cheap (<200 ms
+    each) and don't require a disk cache to be tractable for
+    population studies. For 1,000 NEOs expect ~3 minutes.
+    """
+    out: list[tuple[str, np.ndarray, np.ndarray]] = []
+    for designation in designations:
+        orbit = query(designation)
+        r_km, v_kms = state_at_epoch(orbit, target_epoch, source)
+        out.append((orbit.fullname, r_km, v_kms))
+    return out
+
+
 def _scalar_value(quantity: Any, expected_unit: u.Unit) -> float:
     """Convert SBDB's astropy.Quantity (or bare float for dimensionless
     fields like eccentricity) into a plain float in `expected_unit`."""

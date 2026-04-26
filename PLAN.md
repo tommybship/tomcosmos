@@ -610,8 +610,27 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     - Mode A picks up ~127 km of planetary perturbation work over those 30 days vs. a pure-Kepler baseline — confirms ASSIST's force loop is wired correctly.
     - Critical gotcha (for users): pure-Kepler propagation from element epoch to a scenario epoch months later accumulates **thousands** of km of error (the perturbation history Horizons captures and pure two-body doesn't). For arbitrary scenario epochs, query Horizons directly for the IC state vector instead of Kepler-propagating SBDB elements. Tracked as a follow-up; not blocking.
 
-  - **M5b — bulk asteroid ingestion + viewer scale (next).**
-    - **Exit criteria:** (1) `astroquery.jplsbdb` bulk query for N asteroids matching a filter ("NEOs above 100m diameter," "Trojans," etc.) ingested as test particles; (2) Mode A scenario with 1,000 asteroids completes in <5× the performance-target time; (3) viewer renders 1,000 asteroids without dropping below interactive framerate (instanced spheres or point sprites if needed); (4) `analysis/encounters.py` identifies asteroids that come within 0.1 AU of Earth over the run's duration.
+  - **M5b — bulk asteroid ingestion + viewer scale (in progress).**
+
+    Two ingestion paths, deliberately parallel — the user picks the one that fits the question they're answering. **No default**, no auto-fallback wrapper: the import line itself should disclose the strategy, since the right pick depends on intent and a hidden default would lie.
+
+    - `tomcosmos.targeting.sbdb` — "what JPL knows about this object, propagated forward in two-body gravity." Queries SBDB for orbit-determination elements at the element epoch, Kepler-propagates to scenario epoch using only the Sun's GM. Right for **catalog-scale studies** where IC drift is bounded and uniform across the population, and you're studying dynamics under controlled assumptions rather than comparing against JPL truth. Cheap (<200 ms per body), no caching needed.
+    - `tomcosmos.targeting.horizons` — "the asteroid's actual state at scenario epoch." Queries Horizons for a propagated state vector — the result of JPL's full N-body integration from the orbit-determination instant up to the queried epoch, with all perturbation history baked in. Right for **asteroid mission planning** where IC accuracy matters and you want to compare against JPL truth. ~1.3 s per body uncached; disk-cached to `data/cache/horizons_vectors.json` keyed on `(designation, epoch_jd)` so re-runs are free.
+
+    Both modules expose `state_at_epoch` (single-body) and `bulk_states_at_epoch` (list, order-preserving). Both return ICRF barycentric `(r_km, v_kms)` so call sites are interchangeable at the type level.
+
+    Landed so far:
+    - Both modules' single-body and bulk APIs.
+    - Horizons disk cache + atomic write.
+    - Test that Horizons-at-element-epoch agrees with SBDB-Kepler-at-element-epoch (<1 km, float-precision noise — proves both paths read the same underlying orbit fit).
+    - Test that 3 NEOs ingested from Horizons propagate sanely in Mode A for 30 days (no blowup, no solar plunge, no escape).
+
+    Still ahead for M5b:
+    - **Runner perf.** `runner._row` is per-body-per-sample dict construction; for 1,000 bodies × 100 samples that's ~100k Python dict allocations. Vectorize via numpy slicing across `sim.particles` so the per-sample cost is one loop, not N loops.
+    - **Viewer scale.** PyVista's per-body actor model breaks at ~1,000 asteroids. Refactor `viz.pyvista_viewer` to use a points-based renderer (`add_points` / poly-data with one vertex per body, updated in-place) for the asteroid case, while keeping the per-body actor path for Mode B planet scenarios.
+    - **1,000-body demo scenario.** `scenarios/neos-bulk.yaml` ingesting a real NEO catalog filter (e.g. all numbered NEOs above some H-magnitude threshold) and a viewer pass that demonstrates interactive framerate.
+    - **`analysis/encounters.py` against Mode A.** Existing Hill-sphere detector loops bodies × test_particles; for 1,000 asteroids × 8 planets it's ~8k vector ops per sample, should be fine. Quick benchmark to confirm.
+    - **Mode A `energy_rel_err` cleanup.** `sim.energy()` doesn't capture ASSIST's external forces, so the column is always 0.0 in Mode A. Either compute a Mode-A-aware diagnostic (heliocentric-distance-vs-Kepler-baseline?) or document the column as N/A in Mode A.
 
   - **Cross-cutting fixes that landed alongside M5a:**
     - `state.sim_units` — sim-aware unit conversions so `runner.py` is mode-agnostic. Without this, Mode A propagation through `tomcosmos.run` was silently wrong by 365× (years vs. days mismatch in the integrate / output paths).

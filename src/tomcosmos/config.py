@@ -29,6 +29,19 @@ def runs_dir() -> Path:
     return Path(os.environ.get("TOMCOSMOS_RUNS_DIR", "runs"))
 
 
+def cache_dir() -> Path:
+    """Where deterministic external-API responses get cached so we
+    don't re-query JPL endpoints on every test run / scenario assembly.
+    Currently used by `tomcosmos.targeting.horizons` for state-vector
+    queries, which are deterministic in (designation, epoch_jd) and
+    cost ~1.3 s round-trip each.
+
+    Env: `TOMCOSMOS_CACHE_DIR`. Default: `./data/cache` relative to cwd.
+    Safe to delete at any time — every entry is re-fetchable.
+    """
+    return Path(os.environ.get("TOMCOSMOS_CACHE_DIR", "data/cache"))
+
+
 def log_level() -> str:
     """Default log level for `run` when `--verbose` isn't set.
 
