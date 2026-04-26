@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from tomcosmos import Scenario, run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 pytestmark = pytest.mark.viewer
 
@@ -40,7 +40,7 @@ def _explicit_scenario() -> Scenario:
     )
 
 
-class _NoEphemerisNeeded(SkyfieldSource):  # type: ignore[misc]
+class _NoEphemerisNeeded(EphemerisSource):  # type: ignore[misc]
     def __init__(self) -> None: pass
     def query(self, body, epoch): raise AssertionError  # type: ignore[no-untyped-def]
     def available_bodies(self): return ()  # type: ignore[override]

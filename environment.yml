@@ -10,7 +10,6 @@ dependencies:
   # via pip below from pyproject.toml, which pulls prebuilt wheels from PyPI.
   - astropy>=6,<8
   - skyfield>=1.48,<2
-  - spiceypy>=6,<8
   - astroquery>=0.4.6
   - pydantic>=2.5,<3
   - pyyaml>=6.0,<7
@@ -44,6 +43,7 @@ dependencies:
       # on REBOUND). Scenarios with `integrator.ephemeris_perturbers=True`
       # use it; everything else continues to use vanilla REBOUND. Same
       # Windows-MSVC build saga as REBOUNDx, so we install from our fork
-      # at the matching branch until upstream merges. Tracks
-      # https://github.com/matthewholman/assist (no Windows port upstream).
+      # at the matching branch. Upstream
+      # (https://github.com/matthewholman/assist) has no Windows port;
+      # we have not opened a PR.
       - git+https://github.com/tommybship/assist.git@windows-msvc-build

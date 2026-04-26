@@ -231,14 +231,14 @@ def test_dv_event_in_ecliptic_frame_rotates_correctly() -> None:
     assert abs(v[2] - np.cos(np.deg2rad(23.4392911))) < 1e-3
 
 
-def test_event_log_merges_dv_with_encounters(skyfield_source) -> None:  # type: ignore[no-untyped-def]
+def test_event_log_merges_dv_with_encounters(ephemeris_source) -> None:  # type: ignore[no-untyped-def]
     """A scenario that triggers BOTH an Earth-Hill encounter and a Δv
     burn produces both kinds in the same event log, sorted by time.
 
     Probe IC aimed at Earth's Hill sphere (encounter expected ~day 5-8);
     a tiny tangential burn fires at day 20, well after the encounter, so
     its perturbation doesn't change whether the encounter occurs."""
-    r_earth, v_earth = skyfield_source.query(
+    r_earth, v_earth = ephemeris_source.query(
         "earth", __import__("astropy.time", fromlist=["Time"]).Time(
             "2026-04-23T00:00:00", scale="tdb"))
     r_init = (r_earth + np.array([5.0e6, 0.0, 0.0])).tolist()
@@ -263,7 +263,7 @@ def test_event_log_merges_dv_with_encounters(skyfield_source) -> None:  # type: 
             "dv_events": [{"t_offset": "20 day", "dv": [0.001, 0.0, 0.0]}],
         }],
     })
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     kinds = set(history.events["kind"].unique())
     assert "delta_v" in kinds
     assert "encounter_enter" in kinds

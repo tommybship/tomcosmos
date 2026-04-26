@@ -39,7 +39,7 @@ def test_committed_scenario_resolves_ics(scenario_path: Path) -> None:
     """For every committed scenario whose required kernels are on disk,
     full IC resolution should succeed — no missing bodies, no
     out-of-range epochs, no silently-broken kernel keys."""
-    from tomcosmos.state.ephemeris import SkyfieldSource
+    from tomcosmos.state.ephemeris import EphemerisSource
     from tomcosmos.state.ic import resolve_scenario
 
     scenario = Scenario.from_yaml(scenario_path)
@@ -56,7 +56,7 @@ def test_committed_scenario_resolves_ics(scenario_path: Path) -> None:
                 f"(run: tomcosmos fetch-kernels --include {group.name})"
             )
 
-    source = SkyfieldSource()
+    source = EphemerisSource()
     source.require_covers(scenario.epoch, scenario.duration)
     bodies, particles = resolve_scenario(scenario, source)
     assert len(bodies) == len(scenario.bodies)

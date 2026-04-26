@@ -16,7 +16,6 @@ dependencies = [
     "rebound>=4,<5",
     "astropy>=6,<8",
     "skyfield>=1.48,<2",
-    "spiceypy>=6,<8",
     "astroquery>=0.4.6",
     "pydantic>=2.5,<3",
     "pyyaml>=6.0,<7",
@@ -103,8 +102,8 @@ warn_return_any = false
 module = [
     "rebound.*",
     "reboundx.*",
-    "spiceypy.*",
     "skyfield.*",
+    "assist.*",
     "pyvista.*",
     "vtk.*",
     "trame.*",

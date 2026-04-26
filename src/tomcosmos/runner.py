@@ -26,7 +26,7 @@ from astropy import units as u
 from tomcosmos.config import runs_dir
 from tomcosmos.io.diagnostics import RunMetadata, capture_metadata
 from tomcosmos.io.history import COLUMNS, StateHistory
-from tomcosmos.state.ephemeris import EphemerisSource, SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 from tomcosmos.state.events import DeltaVEvent
 from tomcosmos.state.frames import ecliptic_to_icrf
 from tomcosmos.state.ic import (
@@ -63,7 +63,8 @@ def run(
     scenario:
         Parsed and validated Scenario.
     source:
-        Ephemeris backend; defaults to a SkyfieldSource using DE440s.
+        Ephemeris source; defaults to an `EphemerisSource` rooted at the
+        configured kernel directory and DE440s.
     write:
         Persist to Parquet on completion. Library default is False
         (stay in memory); the CLI passes True.
@@ -76,7 +77,7 @@ def run(
         so `tomcosmos run` enforces clean-tree discipline.
     """
     if source is None:
-        source = SkyfieldSource()
+        source = EphemerisSource()
     source.require_covers(scenario.epoch, scenario.duration)
 
     bodies, particles = resolve_scenario(scenario, source)

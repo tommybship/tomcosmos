@@ -30,7 +30,7 @@ from tomcosmos.exceptions import (
 )
 from tomcosmos.io.history import StateHistory
 from tomcosmos.runner import resolve_output_path, run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 from tomcosmos.state.ic import resolve_scenario
 from tomcosmos.state.scenario import Scenario
 
@@ -125,7 +125,7 @@ def validate_cmd(
         _error(str(e), exit_code=2)
 
     try:
-        source = SkyfieldSource()
+        source = EphemerisSource()
     except Exception as e:  # noqa: BLE001 — skyfield/OS errors
         _error(f"failed to load ephemeris source: {e}", exit_code=3)
 

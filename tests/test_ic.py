@@ -12,7 +12,7 @@ from astropy.time import Time
 
 from tomcosmos import Body, EphemerisIc, ExplicitIc, Scenario
 from tomcosmos.exceptions import ScenarioValidationError, UnknownBodyError
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 from tomcosmos.state.frames import OBLIQUITY_RAD
 from tomcosmos.state.ic import (
     ResolvedBody,
@@ -31,17 +31,17 @@ EPOCH = Time("2026-04-23T00:00:00", scale="tdb")
 
 
 def test_mass_radius_from_constants_when_omitted(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(name="earth", spice_id=399, ic=EphemerisIc(source="ephemeris"))
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert rb.mass_kg == pytest.approx(5.9724e24, rel=1e-6)
     assert rb.radius_km == pytest.approx(6371.0, rel=1e-6)
     assert rb.color_hex == "#4A90D9"
 
 
 def test_explicit_mass_overrides_constants(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(
         name="earth",
@@ -49,25 +49,25 @@ def test_explicit_mass_overrides_constants(
         mass_kg=1.234e25,
         ic=EphemerisIc(source="ephemeris"),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert rb.mass_kg == 1.234e25
     # radius falls through to constants since not overridden
     assert rb.radius_km == pytest.approx(6371.0, rel=1e-6)
 
 
 def test_unknown_body_without_explicit_mass_rejected(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(
         name="vulcan",
         ic=ExplicitIc(source="explicit", r=(1e8, 0.0, 0.0), v=(0.0, 30.0, 0.0)),
     )
     with pytest.raises(ScenarioValidationError, match="mass_kg"):
-        resolve_body(body, EPOCH, skyfield_source)
+        resolve_body(body, EPOCH, ephemeris_source)
 
 
 def test_unknown_body_with_full_explicit_fields_ok(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(
         name="vulcan",
@@ -75,7 +75,7 @@ def test_unknown_body_with_full_explicit_fields_ok(
         radius_km=3000.0,
         ic=ExplicitIc(source="explicit", r=(1e8, 0.0, 0.0), v=(0.0, 30.0, 0.0)),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert rb.mass_kg == 1e24
     assert rb.color_hex is None  # not in constants
     assert rb.spice_id is None
@@ -85,11 +85,11 @@ def test_unknown_body_with_full_explicit_fields_ok(
 
 
 def test_ephemeris_source_matches_direct_query(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(name="earth", spice_id=399, ic=EphemerisIc(source="ephemeris"))
-    rb = resolve_body(body, EPOCH, skyfield_source)
-    r_direct, v_direct = skyfield_source.query(399, EPOCH)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
+    r_direct, v_direct = ephemeris_source.query(399, EPOCH)
     assert np.allclose(rb.r_km, r_direct)
     assert np.allclose(rb.v_kms, v_direct)
     assert rb.r_km.shape == (3,)
@@ -97,11 +97,11 @@ def test_ephemeris_source_matches_direct_query(
 
 
 def test_ephemeris_uses_spice_id_when_both_given(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     body = Body(name="earth", spice_id=399, ic=EphemerisIc(source="ephemeris"))
-    rb = resolve_body(body, EPOCH, skyfield_source)
-    r_by_id, _ = skyfield_source.query(399, EPOCH)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
+    r_by_id, _ = ephemeris_source.query(399, EPOCH)
     assert np.allclose(rb.r_km, r_by_id)
 
 
@@ -109,7 +109,7 @@ def test_ephemeris_uses_spice_id_when_both_given(
 
 
 def test_explicit_icrf_barycentric_passthrough(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     r_in = (1.0e8, 2.0e8, 3.0e7)
     v_in = (10.0, 20.0, 5.0)
@@ -119,13 +119,13 @@ def test_explicit_icrf_barycentric_passthrough(
         radius_km=1.0,
         ic=ExplicitIc(source="explicit", r=r_in, v=v_in, frame="icrf_barycentric"),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert np.allclose(rb.r_km, r_in)
     assert np.allclose(rb.v_kms, v_in)
 
 
 def test_explicit_ecliptic_barycentric_rotates_by_obliquity(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     # Ecliptic +Y → ICRF (0, cos eps, sin eps)
     body = Body(
@@ -139,16 +139,16 @@ def test_explicit_ecliptic_barycentric_rotates_by_obliquity(
             frame="ecliptic_j2000_barycentric",
         ),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert np.isclose(rb.r_km[0], 0.0)
     assert np.isclose(rb.r_km[1], np.cos(OBLIQUITY_RAD))
     assert np.isclose(rb.r_km[2], np.sin(OBLIQUITY_RAD))
 
 
 def test_explicit_icrf_heliocentric_adds_sun_state(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
-    r_sun, v_sun = skyfield_source.query("sun", EPOCH)
+    r_sun, v_sun = ephemeris_source.query("sun", EPOCH)
     r_in = np.array([1.0e8, 2.0e8, 3.0e7])
     v_in = np.array([10.0, 20.0, 5.0])
     body = Body(
@@ -162,16 +162,16 @@ def test_explicit_icrf_heliocentric_adds_sun_state(
             frame="icrf_heliocentric",
         ),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert np.allclose(rb.r_km, r_in + r_sun)
     assert np.allclose(rb.v_kms, v_in + v_sun)
 
 
 def test_explicit_ecliptic_heliocentric_rotates_then_adds_sun(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     from tomcosmos.state.frames import ecliptic_to_icrf
-    r_sun, v_sun = skyfield_source.query("sun", EPOCH)
+    r_sun, v_sun = ephemeris_source.query("sun", EPOCH)
     r_ecl = np.array([1.0e8, 0.0, 0.0])
     v_ecl = np.array([0.0, 30.0, 0.0])
     body = Body(
@@ -185,7 +185,7 @@ def test_explicit_ecliptic_heliocentric_rotates_then_adds_sun(
             frame="ecliptic_j2000_heliocentric",
         ),
     )
-    rb = resolve_body(body, EPOCH, skyfield_source)
+    rb = resolve_body(body, EPOCH, ephemeris_source)
     assert np.allclose(rb.r_km, ecliptic_to_icrf(r_ecl) + r_sun)
     assert np.allclose(rb.v_kms, ecliptic_to_icrf(v_ecl) + v_sun)
 
@@ -194,7 +194,7 @@ def test_explicit_ecliptic_heliocentric_rotates_then_adds_sun(
 
 
 def test_test_particle_explicit_passthrough(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     from tomcosmos import TestParticle, TestParticleExplicitIc
     tp = TestParticle(
@@ -205,7 +205,7 @@ def test_test_particle_explicit_passthrough(
             v=(0.0, 30.0, 0.0),
         ),
     )
-    rp = resolve_test_particle(tp, EPOCH, skyfield_source)
+    rp = resolve_test_particle(tp, EPOCH, ephemeris_source)
     assert isinstance(rp, ResolvedTestParticle)
     assert np.allclose(rp.r_km, (1.0e8, 0.0, 0.0))
 
@@ -213,9 +213,9 @@ def test_test_particle_explicit_passthrough(
 # --- Full scenario integration -----------------------------------------------
 
 
-def test_resolve_scenario_sun_planets(skyfield_source: SkyfieldSource) -> None:
+def test_resolve_scenario_sun_planets(ephemeris_source: EphemerisSource) -> None:
     scenario = Scenario.from_yaml("tests/fixtures/scenarios/good_sun_planets.yaml")
-    bodies, particles = resolve_scenario(scenario, skyfield_source)
+    bodies, particles = resolve_scenario(scenario, ephemeris_source)
     assert len(bodies) == 9
     assert particles == []
     names = [b.name for b in bodies]
@@ -232,18 +232,18 @@ def test_resolve_scenario_sun_planets(skyfield_source: SkyfieldSource) -> None:
 
 
 def test_resolve_scenario_preserves_ephemeris_positions(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     scenario = Scenario.from_yaml("tests/fixtures/scenarios/good_sun_planets.yaml")
-    bodies, _ = resolve_scenario(scenario, skyfield_source)
+    bodies, _ = resolve_scenario(scenario, ephemeris_source)
     earth = next(b for b in bodies if b.name == "earth")
-    r_direct, v_direct = skyfield_source.query(399, scenario.epoch)
+    r_direct, v_direct = ephemeris_source.query(399, scenario.epoch)
     assert np.allclose(earth.r_km, r_direct)
     assert np.allclose(earth.v_kms, v_direct)
 
 
 def test_unknown_body_ephemeris_path_raises(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     # Pluto isn't in BODY_CONSTANTS (M1 stops at Neptune). Providing mass/radius
     # bypasses the constants-lookup check so we reach the ephemeris query,
@@ -255,7 +255,7 @@ def test_unknown_body_ephemeris_path_raises(
         ic=EphemerisIc(source="ephemeris"),
     )
     with pytest.raises(UnknownBodyError):
-        resolve_body(body, EPOCH, skyfield_source)
+        resolve_body(body, EPOCH, ephemeris_source)
 
 
 # --- M3: Lagrange-point IC --------------------------------------------------
@@ -283,7 +283,7 @@ def _sun_earth_scenario() -> Scenario:
 
 @pytest.mark.parametrize("point", ["L4", "L5"])
 def test_lagrange_l4_l5_form_equilateral_triangle(
-    skyfield_source: SkyfieldSource, point: str,
+    ephemeris_source: EphemerisSource, point: str,
 ) -> None:
     """L4 and L5 sit at the apex of an equilateral triangle with the
     primary and secondary: distance to primary == distance to secondary
@@ -298,9 +298,9 @@ def test_lagrange_l4_l5_form_equilateral_triangle(
             type="lagrange", point=point, primary="sun", secondary="earth",
         ),
     )
-    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
-    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
-    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
+    r_sun, _ = ephemeris_source.query("sun", scenario.epoch)
+    r_earth, _ = ephemeris_source.query("earth", scenario.epoch)
     R = float(np.linalg.norm(r_earth - r_sun))
     d_sun = float(np.linalg.norm(rtp.r_km - r_sun))
     d_earth = float(np.linalg.norm(rtp.r_km - r_earth))
@@ -309,7 +309,7 @@ def test_lagrange_l4_l5_form_equilateral_triangle(
     assert abs(d_earth - R) / R < 1e-12
 
 
-def test_lagrange_l4_leads_l5_trails(skyfield_source: SkyfieldSource) -> None:
+def test_lagrange_l4_leads_l5_trails(ephemeris_source: EphemerisSource) -> None:
     """L4 leads the secondary in its orbital direction (positive component
     along the secondary's velocity). L5 trails. Sign of the dot product
     locks the orbital convention against accidental sign flips."""
@@ -317,10 +317,10 @@ def test_lagrange_l4_leads_l5_trails(skyfield_source: SkyfieldSource) -> None:
     from tomcosmos.state.scenario import TestParticleLagrangeIc
 
     scenario = _sun_earth_scenario()
-    _, v_earth = skyfield_source.query("earth", scenario.epoch)
-    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
-    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
-    v_earth_rel = v_earth - skyfield_source.query("sun", scenario.epoch)[1]
+    _, v_earth = ephemeris_source.query("earth", scenario.epoch)
+    r_sun, _ = ephemeris_source.query("sun", scenario.epoch)
+    r_earth, _ = ephemeris_source.query("earth", scenario.epoch)
+    v_earth_rel = v_earth - ephemeris_source.query("sun", scenario.epoch)[1]
 
     def _l(point: str) -> np.ndarray:
         tp = TestParticle(
@@ -328,7 +328,7 @@ def test_lagrange_l4_leads_l5_trails(skyfield_source: SkyfieldSource) -> None:
                 type="lagrange", point=point, primary="sun", secondary="earth",
             ),
         )
-        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
         return rtp.r_km - r_earth
 
     # The L4-Earth and L5-Earth vectors should project oppositely onto the
@@ -340,7 +340,7 @@ def test_lagrange_l4_leads_l5_trails(skyfield_source: SkyfieldSource) -> None:
 
 
 def test_lagrange_l1_l2_collinear_distances(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """L1 and L2 sit ~1.5 million km from Earth on the Sun-Earth line.
 
@@ -353,8 +353,8 @@ def test_lagrange_l1_l2_collinear_distances(
     from tomcosmos.state.scenario import TestParticleLagrangeIc
 
     scenario = _sun_earth_scenario()
-    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
-    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    r_sun, _ = ephemeris_source.query("sun", scenario.epoch)
+    r_earth, _ = ephemeris_source.query("earth", scenario.epoch)
 
     for point, expected_km in (("L1", 1.491e6), ("L2", 1.502e6)):
         tp = TestParticle(
@@ -362,7 +362,7 @@ def test_lagrange_l1_l2_collinear_distances(
                 type="lagrange", point=point, primary="sun", secondary="earth",
             ),
         )
-        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
         d_earth = float(np.linalg.norm(rtp.r_km - r_earth))
         rel_err = abs(d_earth - expected_km) / expected_km
         assert rel_err < 0.05, (
@@ -372,7 +372,7 @@ def test_lagrange_l1_l2_collinear_distances(
 
 
 def test_lagrange_l3_opposite_side_of_primary(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """L3 is on the far side of the primary from the secondary, ~R away
     from both. Its position vector relative to the primary is anti-parallel
@@ -381,8 +381,8 @@ def test_lagrange_l3_opposite_side_of_primary(
     from tomcosmos.state.scenario import TestParticleLagrangeIc
 
     scenario = _sun_earth_scenario()
-    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
-    r_earth, _ = skyfield_source.query("earth", scenario.epoch)
+    r_sun, _ = ephemeris_source.query("sun", scenario.epoch)
+    r_earth, _ = ephemeris_source.query("earth", scenario.epoch)
     R = float(np.linalg.norm(r_earth - r_sun))
 
     tp = TestParticle(
@@ -390,7 +390,7 @@ def test_lagrange_l3_opposite_side_of_primary(
             type="lagrange", point="L3", primary="sun", secondary="earth",
         ),
     )
-    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
     sun_to_l3 = rtp.r_km - r_sun
     sun_to_earth = r_earth - r_sun
     # Anti-parallel: cosine ≈ -1.
@@ -404,7 +404,7 @@ def test_lagrange_l3_opposite_side_of_primary(
 
 
 def test_lagrange_velocity_matches_corotation(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """At any Lagrange point, the velocity in the rotating frame is zero
     by definition. In the inertial frame, the particle co-rotates with
@@ -413,8 +413,8 @@ def test_lagrange_velocity_matches_corotation(
     from tomcosmos.state.scenario import TestParticleLagrangeIc
 
     scenario = _sun_earth_scenario()
-    r_sun, v_sun = skyfield_source.query("sun", scenario.epoch)
-    r_earth, v_earth = skyfield_source.query("earth", scenario.epoch)
+    r_sun, v_sun = ephemeris_source.query("sun", scenario.epoch)
+    r_earth, v_earth = ephemeris_source.query("earth", scenario.epoch)
     sep = r_earth - r_sun
     rel_v = v_earth - v_sun
     L = np.cross(sep, rel_v)
@@ -425,7 +425,7 @@ def test_lagrange_velocity_matches_corotation(
             type="lagrange", point="L4", primary="sun", secondary="earth",
         ),
     )
-    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
     expected_v = v_sun + np.cross(omega, rtp.r_km - r_sun)
     assert np.allclose(rtp.v_kms, expected_v, rtol=1e-12)
 
@@ -434,7 +434,7 @@ def test_lagrange_velocity_matches_corotation(
 
 
 def test_keplerian_circular_orbit_radius_and_speed(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """Circular orbit at semi-major axis a should have |r-parent|=a and
     speed v=sqrt(μ/a) regardless of orientation."""
@@ -442,7 +442,7 @@ def test_keplerian_circular_orbit_radius_and_speed(
     from tomcosmos.state.scenario import TestParticleKeplerianIc
 
     scenario = _sun_earth_scenario()
-    r_sun, v_sun = skyfield_source.query("sun", scenario.epoch)
+    r_sun, v_sun = ephemeris_source.query("sun", scenario.epoch)
 
     a = AU_KM
     tp = TestParticle(
@@ -452,7 +452,7 @@ def test_keplerian_circular_orbit_radius_and_speed(
             inc_deg=23.4, raan_deg=15.0, argp_deg=42.0, mean_anom_deg=70.0,
         ),
     )
-    rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+    rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
     d_sun = float(np.linalg.norm(rtp.r_km - r_sun))
     v_rel = float(np.linalg.norm(rtp.v_kms - v_sun))
 
@@ -465,7 +465,7 @@ def test_keplerian_circular_orbit_radius_and_speed(
 
 
 def test_keplerian_elliptical_periapsis_apoapsis(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """At mean anomaly 0 (periapsis), |r-parent| should equal a(1-e).
     At mean anomaly 180° (apoapsis), it should equal a(1+e)."""
@@ -473,7 +473,7 @@ def test_keplerian_elliptical_periapsis_apoapsis(
     from tomcosmos.state.scenario import TestParticleKeplerianIc
 
     scenario = _sun_earth_scenario()
-    r_sun, _ = skyfield_source.query("sun", scenario.epoch)
+    r_sun, _ = ephemeris_source.query("sun", scenario.epoch)
     a, e = AU_KM, 0.3
 
     def _radius_at(M_deg: float) -> float:
@@ -485,7 +485,7 @@ def test_keplerian_elliptical_periapsis_apoapsis(
                 mean_anom_deg=M_deg,
             ),
         )
-        rtp = resolve_test_particle(tp, scenario.epoch, skyfield_source, scenario)
+        rtp = resolve_test_particle(tp, scenario.epoch, ephemeris_source, scenario)
         return float(np.linalg.norm(rtp.r_km - r_sun))
 
     assert abs(_radius_at(0.0) - a * (1.0 - e)) / (a * (1 - e)) < 1e-12

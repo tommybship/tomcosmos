@@ -1,29 +1,33 @@
-"""Ephemeris sources — where body state vectors come from.
+"""Ephemeris source — where body state vectors come from at t₀.
 
-Two backend implementations behind a single ABC:
-  - `SkyfieldSource` — pure-Python via the `skyfield` library. Default;
-    no native dependency beyond numpy.
-  - `SpiceSource` — spiceypy bindings to NAIF SPICE. Reference
-    implementation — what JPL uses to publish kernels.
+Single backend: skyfield. Reads NAIF SPK kernels (DE440s for the planets /
+Sun / Moon, plus optional satellite kernels jup365 / sat441 / nep097 /
+plu060 / mar099 for moons of the giant planets and Mars) to provide
+ICRF barycentric `(r_km, v_kms)` for any body covered by a loaded
+kernel.
 
-Both speak the same contract (`query`, `available_bodies`, `time_range`,
-`kernel_paths`, context-manager close). Both return ICRF barycentric
-`(r_km, v_kms)` as shape-(3,) float64 arrays. Cross-backend agreement is
-asserted in tests/test_ephemeris.py — the contract isn't worth the abc
-abstraction unless the two implementations land on the same numbers.
+This is **only** used for initial-condition resolution at scenario
+epoch in Mode B (vanilla REBOUND + REBOUNDx). Mode A (ASSIST) reads
+its own DE440 / sb441-n16 directly inside the force loop and does not
+go through this module.
+
+Why skyfield and not something else:
+  - Pure Python; builds on Windows out of the box.
+  - Reads arbitrary NAIF SPK files, including the satellite kernels
+    that ASSIST's hardcoded body table does not cover (Galilean moons,
+    Titan, Triton, Pluto-system moons, etc.).
+  - Cross-checked against JPL Horizons in `tests/test_ephemeris.py`.
 
 **On the chained-kernel question**: NAIF satellite kernels (e.g. jup365)
 store moons relative to their planet's system barycenter, but every
-modern toolkit that walks an SPK chain (skyfield's segment graph,
-spiceypy's kernel pool) returns SSB-relative coordinates when both the
-moon kernel and the corresponding base kernel (de440s) are loaded.
-Earlier versions of this file added the parent's offset on top of the
-already-SSB-relative moon position, double-counting. Don't.
+modern toolkit that walks an SPK chain (skyfield's segment graph) returns
+SSB-relative coordinates when both the moon kernel and the corresponding
+base kernel (de440s) are loaded. Earlier versions of this file added the
+parent's offset on top of the already-SSB-relative moon position, double-
+counting. Don't.
 """
 from __future__ import annotations
 
-import threading
-from abc import ABC, abstractmethod
 from pathlib import Path
 from types import TracebackType
 from typing import Any, NoReturn
@@ -38,73 +42,13 @@ from tomcosmos.constants import BodyConstant, resolve_body_constant
 from tomcosmos.exceptions import EphemerisOutOfRangeError, UnknownBodyError
 from tomcosmos.kernels import group_for_body
 
-
-class EphemerisSource(ABC):
-    """Abstract interface for a source of ICRF-barycentric body states.
-
-    Subclasses implement `query`, `available_bodies`, `time_range`, and
-    `kernel_paths`. `close` and the context-manager protocol have a
-    no-op default; backends with global state (SpiceSource furnshes
-    into the spiceypy kernel pool) override `close`.
-
-    All callers should use `with SomeSource(...) as src:` or call
-    `src.close()` explicitly when done — the no-op default makes that
-    cheap for backends that don't need it.
-    """
-
-    @abstractmethod
-    def query(self, body: str | int, epoch: Time) -> tuple[np.ndarray, np.ndarray]:
-        """Return (r_km, v_kms) in ICRF barycentric at `epoch`. Shapes: (3,)."""
-
-    @abstractmethod
-    def available_bodies(self) -> tuple[str, ...]:
-        """Canonical lowercase names of bodies this source can resolve."""
-
-    @abstractmethod
-    def time_range(self) -> tuple[Time, Time]:
-        """(t_min, t_max) TDB bounds. Intersection across all loaded kernels."""
-
-    @property
-    @abstractmethod
-    def kernel_paths(self) -> tuple[Path, ...]:
-        """Paths of every kernel currently providing data through this source.
-
-        Used by run-metadata diagnostics to SHA256 the inputs for
-        reproducibility. Order is stable but otherwise unspecified.
-        """
-
-    def close(self) -> None:  # noqa: B027 — intentional no-op default; backends with global state override
-        """Release any backend-global resources. Default: no-op."""
-
-    def __enter__(self) -> EphemerisSource:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def require_covers(self, epoch: Time, duration: Quantity) -> None:
-        """Raise `EphemerisOutOfRangeError` if `epoch + duration` escapes coverage."""
-        t_min, t_max = self.time_range()
-        t_end = epoch + duration.to(u.s)
-        if epoch < t_min or t_end > t_max:
-            raise EphemerisOutOfRangeError(
-                f"scenario window [{epoch.isot}, {t_end.isot}] "
-                f"outside ephemeris coverage [{t_min.isot}, {t_max.isot}]"
-            )
-
-
 # Canonical body name → (skyfield-key, parent-canonical-name).
 # parent=None means the body is queried directly from the base kernel.
 # parent="jupiter" means the body lives in a satellite kernel (e.g. jup365)
 # and skyfield needs the parent's kernel loaded too so it can chain its
-# internal lookup back to SSB. We do not add the parent's position ourselves
-# — skyfield already does that. The parent column drives availability and
-# error messages, not the math.
+# internal lookup back to SSB. We do not add the parent's position
+# ourselves — skyfield already does that. The parent column drives
+# availability and error messages, not the math.
 _SKYFIELD_RESOLVERS: dict[str, tuple[str, str | None]] = {
     # In-DE440s bodies — direct lookup.
     "sun":       ("sun", None),
@@ -139,10 +83,15 @@ _SKYFIELD_RESOLVERS: dict[str, tuple[str, str | None]] = {
 }
 
 
-class SkyfieldSource(EphemerisSource):
+class EphemerisSource:
     """Multi-kernel ephemeris via skyfield. Loads every `*.bsp` in the
     kernel directory and routes queries to whichever file provides the
     requested body, chaining position vectors across kernels when needed.
+
+    Single concrete class — there used to be an ABC with two backends
+    (skyfield and spiceypy) but they did identical jobs and the parallel
+    rails earned no keep. See PLAN.md > "Mode A vs Mode B" for the
+    division of labor between this module and ASSIST.
     """
 
     def __init__(
@@ -155,8 +104,8 @@ class SkyfieldSource(EphemerisSource):
         d = Path(directory) if directory is not None else default_kernel_dir()
         d.mkdir(parents=True, exist_ok=True)
         self._directory = d
-        # Backward-compat: kernel_filename names the *base* (DE44x) kernel.
-        # All other .bsp files in the directory are loaded too if present.
+        # `kernel_filename` names the *base* (DE44x) kernel; all other .bsp
+        # files in the directory are loaded too if present.
         self._kernel_filename = kernel_filename
         self._loader = Loader(str(d))
         self._kernels: dict[str, Any] = {}  # filename -> skyfield SpiceKernel
@@ -172,10 +121,42 @@ class SkyfieldSource(EphemerisSource):
 
         self._ts = self._loader.timescale()
 
+    # ------------------------------------------------------------------
+    # Context manager + lifecycle
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:  # noqa: B027 — skyfield has no per-source teardown
+        """No-op. Skyfield keeps no global mutable state we need to release."""
+
+    def __enter__(self) -> EphemerisSource:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
     @property
     def kernel_paths(self) -> tuple[Path, ...]:
-        """All loaded kernel paths, base first."""
+        """All loaded kernel paths, base first.
+
+        Used by run-metadata diagnostics to SHA256 the inputs for
+        reproducibility. Order is stable but otherwise unspecified.
+        """
         return tuple(self._directory / name for name in self._kernels)
+
+    def require_covers(self, epoch: Time, duration: Quantity) -> None:
+        """Raise `EphemerisOutOfRangeError` if `epoch + duration` escapes coverage."""
+        t_min, t_max = self.time_range()
+        t_end = epoch + duration.to(u.s)
+        if epoch < t_min or t_end > t_max:
+            raise EphemerisOutOfRangeError(
+                f"scenario window [{epoch.isot}, {t_end.isot}] "
+                f"outside ephemeris coverage [{t_min.isot}, {t_max.isot}]"
+            )
 
     # ------------------------------------------------------------------
 
@@ -202,6 +183,7 @@ class SkyfieldSource(EphemerisSource):
     # ------------------------------------------------------------------
 
     def query(self, body: str | int, epoch: Time) -> tuple[np.ndarray, np.ndarray]:
+        """Return (r_km, v_kms) in ICRF barycentric at `epoch`. Shapes: (3,)."""
         target_key, parent_canonical = self._resolver_for(body)
         t = self._ts.tdb_jd(float(epoch.tdb.jd))
 
@@ -227,6 +209,7 @@ class SkyfieldSource(EphemerisSource):
         return r, v
 
     def available_bodies(self) -> tuple[str, ...]:
+        """Canonical lowercase names of bodies this source can resolve."""
         out: list[str] = []
         for canonical, (target_key, parent_canonical) in _SKYFIELD_RESOLVERS.items():
             if self._kernel_with(target_key) is None:
@@ -239,6 +222,7 @@ class SkyfieldSource(EphemerisSource):
         return tuple(out)
 
     def time_range(self) -> tuple[Time, Time]:
+        """(t_min, t_max) TDB bounds. Intersection across all loaded kernels."""
         # Per-kernel span = (min start_jd, max end_jd) across that kernel's
         # segments. Multi-piece kernels (e.g., jup365 has segments that join
         # at boundary epochs) are unioned within a kernel — we trust skyfield
@@ -285,210 +269,4 @@ class SkyfieldSource(EphemerisSource):
             f"  tomcosmos fetch-kernels --include {group.name}\n"
             f"to download it. Currently loaded: "
             f"{[k for k in self._kernels]}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# SpiceSource — spiceypy backend
-# ---------------------------------------------------------------------------
-#
-# spiceypy.furnsh / unload mutate the *process-global* SPICE kernel pool. To
-# let multiple SpiceSource instances coexist (e.g. one in the simulator and
-# one in a test fixture both pointing at the same data/kernels directory), we
-# refcount furnsh calls per absolute kernel path. Closing a source decrements
-# every kernel it loaded; a kernel is unloaded only when its last user closes.
-#
-# Tests that need a clean pool can call `_assert_spice_pool_empty()` after
-# tearing down their sources. We don't expose that publicly — production code
-# shouldn't care.
-
-_SPICE_LOCK = threading.Lock()
-_SPICE_REFS: dict[str, int] = {}
-
-
-def _spice_furnsh(path: Path) -> None:
-    """Refcounted furnsh. Multiple sources can load the same kernel safely."""
-    import spiceypy
-
-    key = str(path.resolve())
-    with _SPICE_LOCK:
-        if _SPICE_REFS.get(key, 0) == 0:
-            spiceypy.furnsh(key)
-        _SPICE_REFS[key] = _SPICE_REFS.get(key, 0) + 1
-
-
-def _spice_unload(path: Path) -> None:
-    """Refcounted unload — only unloads when the last user releases."""
-    import spiceypy
-
-    key = str(path.resolve())
-    with _SPICE_LOCK:
-        n = _SPICE_REFS.get(key, 0)
-        if n <= 0:
-            return  # not loaded by us; ignore
-        if n == 1:
-            spiceypy.unload(key)
-            del _SPICE_REFS[key]
-        else:
-            _SPICE_REFS[key] = n - 1
-
-
-_J2000_TDB_JD = 2451545.0  # ET = (TDB_JD - J2000) * 86400
-
-
-# For the gas giants, BodyConstant.spice_id resolves to the planet *center*
-# (599/699/799/899), but de440s.bsp only carries the system *barycenter*
-# (5/6/7/8) — and SkyfieldSource hardcodes "jupiter barycenter" etc. for the
-# same reason. SpiceSource overrides to the barycenter so both backends agree
-# and M1 scenarios that load only de440s.bsp still resolve "jupiter".
-# Switching to planet-center semantics (when the satellite kernel is loaded)
-# is a separate architectural choice — see "physical correctness vs
-# backward-compat" in PLAN.md.
-_SPICE_BARYCENTER_OVERRIDE: dict[str, int] = {
-    "jupiter": 5,
-    "saturn":  6,
-    "uranus":  7,
-    "neptune": 8,
-}
-
-
-class SpiceSource(EphemerisSource):
-    """spiceypy-backed ephemeris source.
-
-    Loads every `*.bsp` in the kernel directory through the refcounted
-    pool helpers above. Queries go through `spkezr(target, et, "J2000",
-    "NONE", "0")` — frame J2000, no aberration corrections, observer
-    Solar System Barycenter (NAIF ID 0). We compute ET from
-    `astropy.Time.tdb.jd` directly, so no leap-seconds kernel (`.tls`)
-    is required.
-
-    Body resolution is just `BodyConstant.spice_id`. spiceypy walks the
-    SPK chain through the loaded pool internally, so the per-backend
-    parent-resolver table that SkyfieldSource needs is unnecessary
-    here.
-    """
-
-    def __init__(self, directory: str | Path | None = None) -> None:
-        d = Path(directory) if directory is not None else default_kernel_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        self._directory = d
-        self._loaded: list[Path] = []
-
-        bsps = sorted(d.glob("*.bsp"))
-        if not bsps:
-            raise FileNotFoundError(
-                f"no .bsp kernels found in {d}; run "
-                "`tomcosmos fetch-kernels` to download de440s.bsp"
-            )
-        # Furnsh each. If something fails halfway, unwind to keep the pool
-        # consistent with what we report.
-        try:
-            for p in bsps:
-                _spice_furnsh(p)
-                self._loaded.append(p)
-        except Exception:
-            self.close()
-            raise
-
-    # ------------------------------------------------------------------
-
-    @property
-    def kernel_paths(self) -> tuple[Path, ...]:
-        return tuple(self._loaded)
-
-    def close(self) -> None:
-        while self._loaded:
-            _spice_unload(self._loaded.pop())
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _et_from_epoch(epoch: Time) -> float:
-        """Ephemeris time = TDB seconds past J2000."""
-        return float((epoch.tdb.jd - _J2000_TDB_JD) * 86400.0)
-
-    def _spice_id_for(self, body: str | int) -> int:
-        const = resolve_body_constant(body)
-        override = _SPICE_BARYCENTER_OVERRIDE.get(const.name)
-        return override if override is not None else int(const.spice_id)
-
-    def query(self, body: str | int, epoch: Time) -> tuple[np.ndarray, np.ndarray]:
-        import spiceypy
-        from spiceypy.utils.exceptions import SpiceyError
-
-        et = self._et_from_epoch(epoch)
-        target = self._spice_id_for(body)
-        try:
-            state, _light_time = spiceypy.spkezr(str(target), et, "J2000", "NONE", "0")
-        except SpiceyError as e:
-            const = resolve_body_constant(body)
-            group = group_for_body(const.name)
-            if group is None:
-                raise UnknownBodyError(
-                    f"spiceypy could not resolve body {const.name!r} "
-                    f"(NAIF id {target}); check that the right kernel is loaded"
-                ) from e
-            raise UnknownBodyError(
-                f"body {const.name!r} requires kernel '{group.filename}' "
-                f"(~{group.approx_size_mb:.0f} MB). Run:\n"
-                f"  tomcosmos fetch-kernels --include {group.name}\n"
-                f"to download it. Currently loaded: "
-                f"{[p.name for p in self._loaded]}"
-            ) from e
-        arr = np.asarray(state, dtype=np.float64)
-        return arr[:3].copy(), arr[3:].copy()
-
-    def available_bodies(self) -> tuple[str, ...]:
-        """Canonical names whose NAIF id appears in any loaded SPK file."""
-        import spiceypy
-
-        covered: set[int] = set()
-        for path in self._loaded:
-            ids = spiceypy.spkobj(str(path))
-            covered.update(int(i) for i in ids)
-        # Walk the canonical-name map (same data SkyfieldSource uses) and
-        # filter to those whose NAIF id is in `covered`.
-        out: list[str] = []
-        for canonical in _SKYFIELD_RESOLVERS:
-            try:
-                sid = self._spice_id_for(canonical)
-            except UnknownBodyError:
-                continue
-            if sid in covered:
-                out.append(canonical)
-        return tuple(out)
-
-    def time_range(self) -> tuple[Time, Time]:
-        """Intersection of per-kernel coverage windows for the Sun (id 10).
-
-        Sun is in every base kernel (de440s) and is the most reliably
-        present body. For specialty kernels that don't include the Sun
-        (satellite kernels do, since their parent body chains through
-        SSB), we fall back to spiceypy's `spkcov` against the kernel's
-        first listed body. The intersection is the conservative answer
-        for "any body queryable here is covered over this window."
-        """
-        import spiceypy
-
-        per_kernel_etspans: list[tuple[float, float]] = []
-        for path in self._loaded:
-            ids = sorted(int(i) for i in spiceypy.spkobj(str(path)))
-            probe_id = 10 if 10 in ids else (ids[0] if ids else None)
-            if probe_id is None:
-                continue
-            cov = spiceypy.spkcov(str(path), probe_id)
-            if len(cov) < 2:
-                continue
-            # cov is a flat array of [start_et_0, end_et_0, start_et_1, ...]
-            per_kernel_etspans.append((float(cov[0]), float(cov[-1])))
-
-        if not per_kernel_etspans:
-            raise RuntimeError(
-                f"no SPK coverage found across {len(self._loaded)} loaded kernels"
-            )
-        start_et = max(span[0] for span in per_kernel_etspans)
-        end_et = min(span[1] for span in per_kernel_etspans)
-        return (
-            Time(_J2000_TDB_JD + start_et / 86400.0, format="jd", scale="tdb"),
-            Time(_J2000_TDB_JD + end_et / 86400.0, format="jd", scale="tdb"),
         )

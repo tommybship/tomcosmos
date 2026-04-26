@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from tomcosmos import Scenario, StateHistory, run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 AU_KM = 1.495978707e8
 EARTH_SPEED_KMS = 29.7847  # circular-orbit velocity at 1 AU
@@ -56,7 +56,7 @@ def _explicit_sun_earth_scenario(duration: str = "1 yr", cadence: str = "30 day"
 
 
 # A stub ephemeris so scenarios with no `ephemeris` ICs don't need a kernel.
-class _NoEphemerisNeeded(SkyfieldSource):  # type: ignore[misc]
+class _NoEphemerisNeeded(EphemerisSource):  # type: ignore[misc]
     def __init__(self) -> None:  # skip the kernel load; nothing calls query
         pass
 
@@ -164,7 +164,7 @@ def test_body_names_populated() -> None:
 
 @pytest.mark.ephemeris
 def test_sun_planets_integrates_and_returns_history(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     scenario = Scenario.model_validate(
         {
@@ -184,7 +184,7 @@ def test_sun_planets_integrates_and_returns_history(
             ],
         }
     )
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     assert history.n_samples == 7  # floor(30/5) + 1
     assert len(history.df) == 7 * 9
     assert history.energy_trace()["energy_rel_err"].max() < 1e-8

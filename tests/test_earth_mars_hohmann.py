@@ -23,13 +23,13 @@ from astropy import units as u
 
 from tomcosmos import Scenario
 from tomcosmos.runner import run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 from tomcosmos.targeting import compute_transfer
 
 
 @pytest.mark.ephemeris
 def test_lambert_targeted_earth_mars_transfer_lands_near_mars(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """The Lambert-solved transfer should put the probe within 1° of
     Mars's phase angle at the arrival epoch.
@@ -50,7 +50,7 @@ def test_lambert_targeted_earth_mars_transfer_lands_near_mars(
     arrival_epoch = base.epoch + 310.0 * u.day
 
     transfer = compute_transfer(
-        source=skyfield_source,
+        source=ephemeris_source,
         from_body="earth",
         to_body="mars",
         departure_epoch=base.epoch,
@@ -62,7 +62,7 @@ def test_lambert_targeted_earth_mars_transfer_lands_near_mars(
     # `model_validate` (matches the rest of the test suite's pattern
     # and avoids importing `TestParticle` at module level — pytest
     # would try to collect anything starting with `Test` as a class).
-    r_earth, v_earth = skyfield_source.query("earth", base.epoch)
+    r_earth, v_earth = ephemeris_source.query("earth", base.epoch)
     dep_dv, arr_dv = transfer.as_dv_events(base.epoch)
 
     scenario = Scenario.model_validate({
@@ -80,7 +80,7 @@ def test_lambert_targeted_earth_mars_transfer_lands_near_mars(
         }],
     })
 
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
 
     # Find the sample closest to arrival_epoch.
     arrival_t_s = float((arrival_epoch - base.epoch).to(u.s).value)
@@ -118,7 +118,7 @@ def test_lambert_targeted_earth_mars_transfer_lands_near_mars(
 
 @pytest.mark.ephemeris
 def test_compute_transfer_reproduces_hohmann_delta_v_magnitudes(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """Δvs from `compute_transfer` should match textbook Hohmann
     magnitudes within ~10% when departing in a real launch window.
@@ -132,7 +132,7 @@ def test_compute_transfer_reproduces_hohmann_delta_v_magnitudes(
     base = Scenario.from_yaml("scenarios/earth-mars-hohmann.yaml")
     arrival_epoch = base.epoch + 310.0 * u.day
     transfer = compute_transfer(
-        source=skyfield_source,
+        source=ephemeris_source,
         from_body="earth", to_body="mars",
         departure_epoch=base.epoch, arrival_epoch=arrival_epoch,
     )

@@ -1,12 +1,7 @@
 """Tests for the ephemeris layer.
 
 Marked @pytest.mark.ephemeris because they require `data/kernels/de440s.bsp`
-to be present (the source fixtures will skip otherwise).
-
-Most contract tests use the parametrized `ephemeris_source` fixture so each
-assertion runs against both `SkyfieldSource` and `SpiceSource`. Backend-
-specific tests (kernel-path naming, error-message wording) keep their own
-fixture and parametrize manually only over the backends they apply to.
+to be present (the source fixture will skip otherwise).
 """
 from __future__ import annotations
 
@@ -18,14 +13,14 @@ from astropy import units as u
 from astropy.time import Time
 
 from tomcosmos.exceptions import EphemerisOutOfRangeError, UnknownBodyError
-from tomcosmos.state.ephemeris import EphemerisSource, SkyfieldSource, SpiceSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 pytestmark = pytest.mark.ephemeris
 
 AU_KM = 1.495978707e8
 
 
-# --- Contract tests: every backend must satisfy these ----------------------
+# --- Contract tests --------------------------------------------------------
 
 
 def test_earth_at_j2026_is_about_1_au_from_sun(ephemeris_source: EphemerisSource) -> None:
@@ -67,7 +62,7 @@ def test_query_returns_shape_3(ephemeris_source: EphemerisSource) -> None:
     assert v.dtype == np.float64
 
 
-def test_available_bodies_covers_m1_roster(ephemeris_source: EphemerisSource) -> None:
+def test_available_bodies_covers_planet_roster(ephemeris_source: EphemerisSource) -> None:
     bodies = set(ephemeris_source.available_bodies())
     expected = {
         "sun", "mercury", "venus", "earth", "moon",
@@ -121,114 +116,50 @@ def test_kernel_paths_listed(ephemeris_source: EphemerisSource) -> None:
     assert any(p.name == "de440s.bsp" for p in paths)
 
 
-@pytest.mark.parametrize("backend", ["skyfield", "spice"])
-def test_close_is_idempotent(kernel_dir: Path, backend: str) -> None:
-    """`close()` must be safe to call multiple times. SpiceSource's
-    refcount-based unload must not underflow on a second call.
+def test_close_is_idempotent(kernel_dir: Path) -> None:
+    """`close()` must be safe to call multiple times.
 
-    Builds its own sources rather than borrowing the session-scoped
-    fixtures — closing the shared fixture would cascade into every
+    Builds its own source rather than borrowing the session-scoped
+    fixture — closing the shared fixture would cascade into every
     subsequent test."""
-    if backend == "skyfield":
-        src: EphemerisSource = SkyfieldSource(directory=kernel_dir)
-    else:
-        src = SpiceSource(directory=kernel_dir)
+    src = EphemerisSource(directory=kernel_dir)
     src.close()
     src.close()  # must not raise
 
 
-# --- Cross-backend agreement: same input, same answer ----------------------
-
-
-_AGREEMENT_BODIES = ["sun", "earth", "moon", "jupiter", "saturn", "neptune"]
-
-
-@pytest.mark.parametrize("body", _AGREEMENT_BODIES)
-def test_skyfield_and_spice_agree_on_position(
-    skyfield_source: SkyfieldSource, spice_source: SpiceSource, body: str,
-) -> None:
-    """The ABC isn't worth its abstraction unless both implementations
-    return the same numbers for the same input. Bound: 1 km on position,
-    1e-6 km/s on velocity. Residual is numerical-precision noise from
-    the two libraries' internal arithmetic, not physics."""
-    t = Time("2026-04-23T00:00:00", scale="tdb")
-    r_sky, v_sky = skyfield_source.query(body, t)
-    r_spice, v_spice = spice_source.query(body, t)
-    dr = float(np.linalg.norm(r_sky - r_spice))
-    dv = float(np.linalg.norm(v_sky - v_spice))
-    assert dr < 1.0, f"{body}: |Δr|={dr:.3e} km between backends"
-    assert dv < 1e-6, f"{body}: |Δv|={dv:.3e} km/s between backends"
-
-
-# --- Backend-specific tests ------------------------------------------------
-
-
-def test_skyfield_kernel_paths_base_first(skyfield_source: SkyfieldSource) -> None:
-    """SkyfieldSource exposes the base (DE44x) kernel as paths[0]; this
+def test_kernel_paths_base_first(ephemeris_source: EphemerisSource) -> None:
+    """`kernel_paths` exposes the base (DE44x) kernel as paths[0]; this
     is load-bearing for diagnostics and run-metadata reproducibility."""
-    paths = skyfield_source.kernel_paths
+    paths = ephemeris_source.kernel_paths
     assert paths[0].name == "de440s.bsp"
 
 
 def test_galilean_query_without_kernel_says_how_to_install(
-    skyfield_source: SkyfieldSource, kernel_dir: Path,
+    ephemeris_source: EphemerisSource, kernel_dir: Path,
 ) -> None:
     """When jup365.bsp isn't present, asking for Io should fail with a
     clear instruction to fetch the right kernel — not a generic error.
 
     Skipped when jup365.bsp IS loaded; the missing-kernel error path
-    is what we're testing here, not the success path (covered elsewhere)."""
+    is what we're testing here, not the success path."""
     if (kernel_dir / "jup365.bsp").exists():
         pytest.skip("jup365.bsp present; can't exercise missing-kernel error")
     t = Time("2026-04-23T00:00:00", scale="tdb")
     with pytest.raises(UnknownBodyError, match=r"jup.*\.bsp|fetch-kernels --include jupiter"):
-        skyfield_source.query("io", t)
+        ephemeris_source.query("io", t)
 
 
 def test_titan_query_without_kernel_says_how_to_install(
-    skyfield_source: SkyfieldSource, kernel_dir: Path,
+    ephemeris_source: EphemerisSource, kernel_dir: Path,
 ) -> None:
     if (kernel_dir / "sat441.bsp").exists():
         pytest.skip("sat441.bsp present; can't exercise missing-kernel error")
     t = Time("2026-04-23T00:00:00", scale="tdb")
     with pytest.raises(UnknownBodyError, match=r"sat.*\.bsp|fetch-kernels --include saturn"):
-        skyfield_source.query("titan", t)
+        ephemeris_source.query("titan", t)
 
 
-def test_spice_refcount_keeps_other_source_alive(kernel_dir: Path) -> None:
-    """Two SpiceSource instances over the same kernel directory must coexist:
-    closing one decrements the refcount but doesn't unload kernels still in
-    use by the other. Without refcounting, the second source's queries would
-    fail with a SpiceyError after the first close.
-
-    Asserts deltas rather than absolute refcounts because the session
-    `spice_source` fixture is also holding refs."""
-    from tomcosmos.state.ephemeris import _SPICE_REFS
-
-    base = dict(_SPICE_REFS)
-    a = SpiceSource(directory=kernel_dir)
-    b = SpiceSource(directory=kernel_dir)
-    after_two = dict(_SPICE_REFS)
-    for k, n in after_two.items():
-        assert n == base.get(k, 0) + 2, f"refcount delta for {k}: {n} - {base.get(k, 0)} != 2"
-
-    a.close()
-    after_one_close = dict(_SPICE_REFS)
-    for k, n in after_one_close.items():
-        assert n == base.get(k, 0) + 1, (
-            f"refcount delta for {k} after closing one: {n} - {base.get(k, 0)} != 1"
-        )
-
-    # b must still be queryable.
-    t = Time("2026-04-23T00:00:00", scale="tdb")
-    r, _ = b.query("earth", t)
-    assert r.shape == (3,)
-
-    b.close()
-    assert dict(_SPICE_REFS) == base, "refcount didn't return to baseline after closing both"
-
-
-# --- M2: parented-body positions are SSB-relative, not double-counted -------
+# --- Parented-body positions are SSB-relative, not double-counted ----------
 
 # Each Galilean's mean orbital semi-major axis around Jupiter, in AU. The test
 # accepts up to 2× this as a generous bound: we're catching the "moon at 5+ AU
@@ -248,11 +179,10 @@ def test_galilean_is_close_to_jupiter(
     """A satellite-kernel body must end up near its primary, not at 2× the
     primary's SSB distance.
 
-    Regression for the chained-add bug in pre-2026-04 SkyfieldSource: the
+    Regression for the chained-add bug in pre-2026-04 EphemerisSource: the
     library already returns SSB-relative positions for parented bodies, so
     adding the parent's SSB position on top placed every Galilean at twice
-    Jupiter's distance. Runs against both backends. Bound: 2× the moon's
-    real orbital radius."""
+    Jupiter's distance. Bound: 2× the moon's real orbital radius."""
     if not (kernel_dir / "jup365.bsp").exists():
         pytest.skip("jup365.bsp not present")
     t = Time("2026-04-23T00:00:00", scale="tdb")

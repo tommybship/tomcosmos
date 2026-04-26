@@ -16,7 +16,7 @@ from astropy import units as u
 from astropy.time import Time
 
 from tomcosmos import IntegratorConfig, Scenario
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 from tomcosmos.state.ic import (
     ResolvedBody,
     ResolvedTestParticle,
@@ -233,10 +233,10 @@ def test_test_particle_has_mass_zero_and_collision_radius() -> None:
 
 @pytest.mark.ephemeris
 def test_sun_planets_scenario_builds_and_integrates(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     scenario = Scenario.from_yaml("tests/fixtures/scenarios/good_sun_planets.yaml")
-    bodies, particles = resolve_scenario(scenario, skyfield_source)
+    bodies, particles = resolve_scenario(scenario, ephemeris_source)
     sim = build_simulation(bodies, particles, scenario.integrator)
     assert sim.N == 9
     e0 = sim.energy()
@@ -251,7 +251,7 @@ def test_sun_planets_scenario_builds_and_integrates(
 
 @pytest.mark.ephemeris
 def test_mercurius_handles_earth_hill_sphere_flyby_without_blowup(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """A small massive probe on a trajectory that passes through Earth's
     Hill sphere should not destabilize MERCURIUS.
@@ -276,7 +276,7 @@ def test_mercurius_handles_earth_hill_sphere_flyby_without_blowup(
     from tomcosmos.runner import run
 
     epoch = Time("2026-04-23T00:00:00", scale="tdb")
-    r_earth, v_earth = skyfield_source.query("earth", epoch)
+    r_earth, v_earth = ephemeris_source.query("earth", epoch)
     # Probe starts 5e6 km from Earth (above Hill ~1.5e6 km), closing at
     # 10 km/s. Same geometry as the M3 encounter test, validated to
     # produce a Hill-crossing within ~5 days.
@@ -302,7 +302,7 @@ def test_mercurius_handles_earth_hill_sphere_flyby_without_blowup(
             ),
         ],
     )
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
 
     # No NaN / inf in any state column.
     state_cols = ["x", "y", "z", "vx", "vy", "vz"]

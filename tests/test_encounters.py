@@ -13,7 +13,7 @@ import pytest
 from tomcosmos import Scenario, run
 from tomcosmos.analysis.encounters import detect_hill_encounters
 from tomcosmos.io.history import StateHistory
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 
 def _three_body_history(
@@ -160,7 +160,7 @@ def test_no_test_particles_no_events() -> None:
 
 
 @pytest.mark.ephemeris
-def test_runner_attaches_events_to_history(skyfield_source: SkyfieldSource) -> None:
+def test_runner_attaches_events_to_history(ephemeris_source: EphemerisSource) -> None:
     """A direct flyby launched at Earth produces enter/exit events
     on the resulting StateHistory."""
     epoch_scenario = Scenario.model_validate({
@@ -178,7 +178,7 @@ def test_runner_attaches_events_to_history(skyfield_source: SkyfieldSource) -> N
             "ic": {"type": "explicit", "r": [0.0, 0.0, 0.0], "v": [0.0, 0.0, 0.0]},
         }],
     })
-    r_earth, v_earth = skyfield_source.query("earth", epoch_scenario.epoch)
+    r_earth, v_earth = ephemeris_source.query("earth", epoch_scenario.epoch)
     r_init = (r_earth + np.array([5.0e6, 0.0, 0.0])).tolist()
     v_init = (v_earth + np.array([-10.0, 0.0, 0.0])).tolist()
     scenario = Scenario.model_validate({
@@ -189,7 +189,7 @@ def test_runner_attaches_events_to_history(skyfield_source: SkyfieldSource) -> N
         }],
     })
 
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     assert history.events is not None
     assert len(history.events) >= 1
     enter = history.events[history.events["kind"] == "encounter_enter"]
@@ -198,12 +198,12 @@ def test_runner_attaches_events_to_history(skyfield_source: SkyfieldSource) -> N
 
 
 @pytest.mark.ephemeris
-def test_l4_tadpole_has_no_encounters(skyfield_source: SkyfieldSource) -> None:
+def test_l4_tadpole_has_no_encounters(ephemeris_source: EphemerisSource) -> None:
     """The Sun-Earth L4 trojan never approaches Earth's Hill sphere — its
     closest approach is ~1 AU away. If our detector spuriously fires here,
     the Hill-radius math is wrong."""
     scenario = Scenario.from_yaml("scenarios/sun-earth-l4-tadpole.yaml")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     assert history.events is not None
     assert history.events.empty, (
         f"L4 trojan should have no Hill encounters; got {len(history.events)} events"

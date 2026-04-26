@@ -13,7 +13,7 @@ import pytest
 
 from tomcosmos import RunMetadata, Scenario, load_run, run
 from tomcosmos.runner import resolve_output_path
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 AU_KM = 1.495978707e8
 
@@ -38,7 +38,7 @@ def _explicit_scenario(tmp_path: Path | None = None) -> Scenario:
     )
 
 
-class _NoEphemerisNeeded(SkyfieldSource):  # type: ignore[misc]
+class _NoEphemerisNeeded(EphemerisSource):  # type: ignore[misc]
     def __init__(self) -> None:  # skip kernel load
         pass
 
@@ -281,7 +281,7 @@ def test_allow_dirty_true_is_default() -> None:
 
 @pytest.mark.ephemeris
 def test_sun_planets_round_trip_through_parquet(
-    skyfield_source: SkyfieldSource, tmp_path: Path,
+    ephemeris_source: EphemerisSource, tmp_path: Path,
 ) -> None:
     scenario = Scenario.model_validate(
         {
@@ -301,12 +301,12 @@ def test_sun_planets_round_trip_through_parquet(
             ],
         }
     )
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     out = tmp_path / "sun-planets.parquet"
     history.to_parquet(out)
     loaded = load_run(out)
     assert loaded.metadata is not None
-    # kernel_hashes populated from the real SkyfieldSource
+    # kernel_hashes populated from the real EphemerisSource
     assert "de440s.bsp" in loaded.metadata.kernel_hashes
     assert len(loaded.metadata.kernel_hashes["de440s.bsp"]) == 64
     # DataFrame same length

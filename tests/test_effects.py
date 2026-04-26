@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from tomcosmos import Scenario, run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 AU_KM = 1.495978707e8
 
@@ -41,7 +41,7 @@ def _sun_mercury_scenario(
     )
 
 
-class _NoEphemerisNeeded(SkyfieldSource):  # type: ignore[misc]
+class _NoEphemerisNeeded(EphemerisSource):  # type: ignore[misc]
     def __init__(self) -> None: pass
     def query(self, body, epoch): raise AssertionError  # type: ignore[no-untyped-def]
     def available_bodies(self): return ()  # type: ignore[override]

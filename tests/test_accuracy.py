@@ -13,7 +13,7 @@ import pytest
 from astropy import units as u
 
 from tomcosmos import Scenario, run
-from tomcosmos.state.ephemeris import SkyfieldSource
+from tomcosmos.state.ephemeris import EphemerisSource
 
 pytestmark = pytest.mark.ephemeris
 
@@ -44,7 +44,7 @@ MERCURY_1YR_ENVELOPE_KM = 700_000.0
 
 
 def test_earth_within_envelope_after_one_year(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """PLAN > Accuracy envelope: Earth propagated 1 yr from ephemeris ICs
     should match the ephemeris at t=1 yr within the observed envelope.
@@ -55,13 +55,13 @@ def test_earth_within_envelope_after_one_year(
     growing the model (moons, GR add-ons) rather than tweaking the
     integrator."""
     scenario = _full_sun_planets(duration="365 day", cadence="365 day")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
 
     earth = history.body_trajectory("earth")
     r_sim = earth[["x", "y", "z"]].to_numpy(dtype=np.float64)[-1]
 
     t_end = scenario.epoch + 365.0 * u.day
-    r_truth, _ = skyfield_source.query("earth", t_end)
+    r_truth, _ = ephemeris_source.query("earth", t_end)
 
     delta_km = float(np.linalg.norm(r_sim - r_truth))
     assert delta_km < EARTH_1YR_ENVELOPE_KM, (
@@ -71,19 +71,19 @@ def test_earth_within_envelope_after_one_year(
 
 
 def test_mercury_within_envelope_after_one_year(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """Mercury's short period gives it more orbits per year; any mass or
     GM mismatch compounds. Envelope is 700,000 km at 1 yr — mostly
     phase error from the same physics omissions listed above."""
     scenario = _full_sun_planets(duration="365 day", cadence="365 day")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
 
     mercury = history.body_trajectory("mercury")
     r_sim = mercury[["x", "y", "z"]].to_numpy(dtype=np.float64)[-1]
 
     t_end = scenario.epoch + 365.0 * u.day
-    r_truth, _ = skyfield_source.query("mercury", t_end)
+    r_truth, _ = ephemeris_source.query("mercury", t_end)
 
     delta_km = float(np.linalg.norm(r_sim - r_truth))
     assert delta_km < MERCURY_1YR_ENVELOPE_KM, (
@@ -93,13 +93,13 @@ def test_mercury_within_envelope_after_one_year(
 
 
 def test_energy_bounded_over_10_years(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """Symplectic signature: |ΔE/E| stays below the WHFast envelope
     (1e-10) and doesn't drift linearly. A drifting slope would indicate
     wrong units, missing move_to_com(), or a bad timestep."""
     scenario = _full_sun_planets(duration="10 yr", cadence="30 day")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
 
     trace = history.energy_trace()
     assert trace["energy_rel_err"].max() < 1e-9
@@ -160,20 +160,20 @@ def _jupiter_galileans_long(duration: str, cadence: str) -> Scenario:
 
 
 def test_ias15_earth_moon_energy_under_1e_minus_12_over_10_years(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """M2 exit criterion #4: IAS15 holds |ΔE/E| ≤ 1e-12 on Earth+Moon
     over a 10-year integration. IAS15's per-step error target is
     machine precision; a violation here means wrong units, missing
     move_to_com(), or a regression in the moon-IC pipeline."""
     scenario = _earth_moon_long(duration="10 yr", cadence="30 day")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     max_err = float(history.df["energy_rel_err"].max())
     assert max_err < 1e-12, f"Earth+Moon |ΔE/E| over 10 yr: {max_err:.3e}"
 
 
 def test_ias15_jupiter_galileans_energy_under_1e_minus_12_over_10_years(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
     kernel_dir,  # type: ignore[no-untyped-def]
 ) -> None:
     """M2 exit criterion #4 on the stiffer system: Jupiter + 4 Galileans
@@ -183,7 +183,7 @@ def test_ias15_jupiter_galileans_energy_under_1e_minus_12_over_10_years(
     if not (kernel_dir / "jup365.bsp").exists():
         pytest.skip("jup365.bsp not present")
     scenario = _jupiter_galileans_long(duration="10 yr", cadence="30 day")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     max_err = float(history.df["energy_rel_err"].max())
     assert max_err < 1e-12, f"Jupiter+Galileans |ΔE/E| over 10 yr: {max_err:.3e}"
 
@@ -192,7 +192,7 @@ def test_ias15_jupiter_galileans_energy_under_1e_minus_12_over_10_years(
 
 
 def test_l4_tadpole_within_10_degrees_over_50_years(
-    skyfield_source: SkyfieldSource,
+    ephemeris_source: EphemerisSource,
 ) -> None:
     """A test particle at Sun-Earth L4 should librate stably around the
     equilibrium for the entire integration window. PLAN.md M3 exit
@@ -208,7 +208,7 @@ def test_l4_tadpole_within_10_degrees_over_50_years(
     )
 
     scenario = Scenario.from_yaml("scenarios/sun-earth-l4-tadpole.yaml")
-    history = run(scenario, source=skyfield_source)
+    history = run(scenario, source=ephemeris_source)
     rotated = rotate_history_to_corotating(
         history, primary="sun", secondary="earth",
     )
