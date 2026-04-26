@@ -1,5 +1,9 @@
 """Tests for optional physics effects (GR today, SRP / Yarkovsky later).
 
+These tests run against Mode B (vanilla REBOUND + REBOUNDx). Mode A
+(ASSIST) bakes GR + J2 into its force model and rejects `effects`
+at the schema layer, so it isn't exercised here.
+
 Most tests use a minimal Sun-Mercury two-body scenario so Newtonian
 dynamics produce zero precession and any shift under GR is unambiguous.
 """
@@ -48,6 +52,16 @@ class _NoEphemerisNeeded(EphemerisSource):  # type: ignore[misc]
     def time_range(self):  # type: ignore[override]
         from astropy.time import Time
         return Time("1900-01-01", scale="tdb"), Time("2200-01-01", scale="tdb")
+
+
+def _require_reboundx() -> None:
+    try:
+        import reboundx  # noqa: F401
+    except ImportError:
+        pytest.skip(
+            "reboundx not installed — Mode B GR effects require it "
+            "(pip install reboundx, or the windows-msvc-build fork on Windows)"
+        )
 
 
 # --- Schema validation -------------------------------------------------------
@@ -127,7 +141,9 @@ def test_gr_requires_sun_body() -> None:
 
 
 def test_gr_sets_velocity_dependent_flag() -> None:
-    """WHFast needs this flag or it treats the force as instantaneous."""
+    """WHFast needs this flag or it treats the force as instantaneous.
+    REBOUNDx's `gr` force sets it itself when added to the simulation."""
+    _require_reboundx()
     from tomcosmos.state.ic import resolve_scenario
     from tomcosmos.state.integrator import build_simulation
 
@@ -135,7 +151,7 @@ def test_gr_sets_velocity_dependent_flag() -> None:
     bodies, particles = resolve_scenario(s, _NoEphemerisNeeded())
     sim = build_simulation(bodies, particles, s.integrator)
     assert sim.force_is_velocity_dependent == 1
-    # Callback kept alive on the sim so Python doesn't GC it
+    # REBOUNDx Extras handle kept alive on the sim so Python doesn't GC it.
     assert hasattr(sim, "_tomcosmos_effect_callbacks")
 
 
@@ -152,6 +168,7 @@ def test_no_effects_no_velocity_dependent_flag() -> None:
 
 def test_gr_and_newton_positions_start_identical() -> None:
     """At t=0, GR hasn't had time to shift anything."""
+    _require_reboundx()
     h_n = run(_sun_mercury_scenario(duration="1 yr", with_gr=False),
               source=_NoEphemerisNeeded())
     h_g = run(_sun_mercury_scenario(duration="1 yr", with_gr=True),
@@ -167,6 +184,7 @@ def test_gr_shifts_mercury_position_over_time() -> None:
     """Mercury's 1PN perihelion precession is ~43 arcsec/century; over
     10 years that's a few arcsec, translating to thousands of km of
     position shift versus pure Newtonian at Mercury's 0.4 AU orbit."""
+    _require_reboundx()
     h_n = run(_sun_mercury_scenario(duration="10 yr", with_gr=False),
               source=_NoEphemerisNeeded())
     h_g = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
@@ -183,6 +201,7 @@ def test_gr_shifts_mercury_position_over_time() -> None:
 def test_gr_signature_scales_with_time() -> None:
     """Position shift should grow roughly linearly (with oscillations) as
     precession accumulates."""
+    _require_reboundx()
     h_n = run(_sun_mercury_scenario(duration="20 yr", with_gr=False),
               source=_NoEphemerisNeeded())
     h_g = run(_sun_mercury_scenario(duration="20 yr", with_gr=True),
@@ -190,13 +209,11 @@ def test_gr_signature_scales_with_time() -> None:
     m_n = h_n.body_trajectory("mercury")
     m_g = h_g.body_trajectory("mercury")
     deltas_km = []
-    # sample at 5, 10, 20 yr
     for t_target in (5, 10, 20):
         i = min(t_target, len(m_n) - 1)
         r_n = m_n.iloc[i][["x", "y", "z"]].to_numpy()
         r_g = m_g.iloc[i][["x", "y", "z"]].to_numpy()
         deltas_km.append(float(np.linalg.norm(r_n - r_g)))
-    # Monotone-ish growth (allow ~30% wiggle for orbital-phase effects)
     assert deltas_km[2] > deltas_km[0], (
         f"GR shift should grow over time; got {deltas_km}"
     )
@@ -205,6 +222,7 @@ def test_gr_signature_scales_with_time() -> None:
 def test_gr_energy_error_bounded_but_larger_than_pure_newtonian() -> None:
     """With GR enabled, WHFast loses strict symplecticity (force is
     velocity-dependent). Energy still bounded, just not at 1e-13 anymore."""
+    _require_reboundx()
     h_n = run(_sun_mercury_scenario(duration="10 yr", with_gr=False),
               source=_NoEphemerisNeeded())
     h_g = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
@@ -216,90 +234,25 @@ def test_gr_energy_error_bounded_but_larger_than_pure_newtonian() -> None:
     assert max_err_g > max_err_n      # GR really is less tight
 
 
-# --- Backend selection + cross-validation -----------------------------------
+def test_gr_without_reboundx_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If REBOUNDx isn't importable when a scenario asks for GR, we owe
+    the user a clear error pointing at the install command — not a
+    bare ImportError from somewhere deep in the integrator wiring."""
+    import builtins
 
-
-def test_reboundx_is_preferred_when_available() -> None:
-    """If reboundx is importable, that's the backend we should use.
-    Failing this would mean we silently fell back to the Python version
-    despite reboundx being present — a regression worth catching."""
-    from tomcosmos.state import effects
-    try:
-        import reboundx  # noqa: F401
-    except ImportError:
-        pytest.skip("reboundx not installed — backend-selection check N/A")
-    assert effects.HAS_REBOUNDX is True
-
-
-def test_python_fallback_when_reboundx_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force the fallback path and verify it still produces correct
-    physics — i.e. if reboundx ever breaks or is uninstalled, our own
-    implementation still works."""
-
-    from tomcosmos.state import effects
     from tomcosmos.state.ic import resolve_scenario
     from tomcosmos.state.integrator import build_simulation
 
-    # Patch the flag and function so _attach_gr_python is used.
-    monkeypatch.setattr(effects, "HAS_REBOUNDX", False)
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if name == "reboundx":
+            raise ImportError("simulated absence")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
 
     s = _sun_mercury_scenario(duration="1 yr", with_gr=True)
     bodies, particles = resolve_scenario(s, _NoEphemerisNeeded())
-    sim = build_simulation(bodies, particles, s.integrator)
-
-    # Python backend stashes a Python callable; REBOUNDx backend stashes
-    # an Extras object. Distinguish by type.
-    stashed = sim._tomcosmos_effect_callbacks[0]  # noqa: SLF001
-    assert callable(stashed)
-    # Not a reboundx Extras instance (the C handle).
-    assert type(stashed).__name__ != "Extras"
-
-
-def test_reboundx_and_python_agree_on_mercury_shift() -> None:
-    """Cross-validation: the REBOUNDx `gr` force and our Python 1PN
-    implementation are the same physics (Einstein-Infeld-Hoffmann
-    simplified with the Sun as dominant mass). Over 10 simulated years,
-    the Mercury position shift versus pure Newtonian should agree
-    between backends to within integrator roundoff — a ~10% band
-    accounts for the small order-of-operations differences in the
-    force computation loop.
-
-    Skipped when reboundx isn't installed (Unix CI without it, or
-    Windows without our patched fork)."""
-    try:
-        import reboundx  # noqa: F401
-    except ImportError:
-        pytest.skip("reboundx not installed — cross-validation N/A")
-
-    from tomcosmos.state import effects
-
-    # Pure-Newton reference
-    h_newton = run(_sun_mercury_scenario(duration="10 yr", with_gr=False),
-                   source=_NoEphemerisNeeded())
-    r_newton = h_newton.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
-
-    # REBOUNDx GR
-    h_rebx = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
-                 source=_NoEphemerisNeeded())
-    r_rebx = h_rebx.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
-    shift_rebx = np.linalg.norm(r_rebx - r_newton)
-
-    # Python GR (force the fallback path)
-    original = effects.HAS_REBOUNDX
-    try:
-        effects.HAS_REBOUNDX = False
-        h_py = run(_sun_mercury_scenario(duration="10 yr", with_gr=True),
-                   source=_NoEphemerisNeeded())
-    finally:
-        effects.HAS_REBOUNDX = original
-    r_py = h_py.body_trajectory("mercury")[["x", "y", "z"]].to_numpy()[-1]
-    shift_py = np.linalg.norm(r_py - r_newton)
-
-    # Both backends should produce a shift of a few thousand km.
-    # Allow them to agree to within 15% of each other (integration noise +
-    # tiny differences in which PN terms each implementation keeps).
-    rel_diff = abs(shift_rebx - shift_py) / max(shift_rebx, shift_py)
-    assert rel_diff < 0.15, (
-        f"Backend disagreement: reboundx shift {shift_rebx:.0f} km vs "
-        f"python shift {shift_py:.0f} km, rel diff {rel_diff:.2%}"
-    )
+    with pytest.raises(RuntimeError, match=r"reboundx.*pip install"):
+        build_simulation(bodies, particles, s.integrator)

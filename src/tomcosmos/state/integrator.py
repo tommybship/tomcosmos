@@ -184,13 +184,16 @@ def _configure_integrator(sim: rebound.Simulation, cfg: IntegratorConfig) -> Non
 def _apply_effects(sim: rebound.Simulation, cfg: IntegratorConfig) -> None:
     """Attach optional physics effects (GR, etc.) after the particles are in.
 
-    Callbacks are stashed on the sim as a hidden attribute so they stay
-    alive for as long as the simulation does — REBOUND's C side holds only
-    a CFUNCTYPE pointer.
+    Mode B only — Mode A's ASSIST force model already includes GR + J2,
+    and the schema validator rejects an `effects` list when ASSIST is on.
+
+    Handles are stashed on the sim as a hidden attribute so they stay
+    alive for as long as the simulation does — REBOUND's C side holds
+    only a callback pointer.
     """
     if not cfg.effects:
         return
-    callbacks: list[object] = []
+    handles: list[object] = []
     if "gr" in cfg.effects:
-        callbacks.append(attach_gr(sim, sun_hash=rebound.hash("sun").value))
-    sim._tomcosmos_effect_callbacks = callbacks
+        handles.append(attach_gr(sim))
+    sim._tomcosmos_effect_callbacks = handles
