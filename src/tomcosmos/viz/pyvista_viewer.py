@@ -44,6 +44,17 @@ _LOG_SCALE_EXPONENT: float = 0.3
 
 _DEFAULT_COLOR = "#CCCCCC"  # for bodies not in BODY_CONSTANTS
 
+# When a scenario declares more test particles than this, the viewer
+# renders them as a single point-cloud `pv.PolyData` instead of one
+# `pv.Sphere` actor per particle. PyVista's per-actor rendering pipeline
+# breaks down around a few hundred actors; the points-cloud path scales
+# to tens of thousands. Massive bodies (Sun, planets, moons) keep the
+# per-body actor treatment regardless — there are never enough of them
+# to matter, and the extra detail (sized spheres, labels, trails) is
+# the whole point of having them on screen.
+_BULK_COHORT_THRESHOLD: int = 20
+_BULK_POINT_COLOR_HEX: str = "#FFFFFF"
+
 Scaling = Literal["true", "log", "marker"]
 
 
@@ -104,6 +115,27 @@ class Viewer:
         self._plotter = pv.Plotter(off_screen=off_screen, title="tomcosmos")
         self._body_actors: dict[str, pv.Actor] = {}
         self._label_polydata: pv.PolyData | None = None
+
+        # Decide which names render as the bulk point cloud vs. as
+        # individual sphere actors. Only test particles are eligible —
+        # massive bodies always get the full treatment.
+        tp_names = [p.name for p in history.scenario.test_particles]
+        if len(tp_names) > _BULK_COHORT_THRESHOLD:
+            self._bulk_cohort: tuple[str, ...] = tuple(tp_names)
+        else:
+            self._bulk_cohort = ()
+        self._bulk_cohort_set = frozenset(self._bulk_cohort)
+        # (n_samples, n_bulk, 3) array of AU positions, ready for slice-by-sample
+        # writes into the bulk PolyData. Built once up front because slicing
+        # this is much faster than the per-name dict lookups in set_sample.
+        if self._bulk_cohort:
+            self._bulk_positions_au: np.ndarray = np.stack(
+                [self._positions_au[n] for n in self._bulk_cohort], axis=1,
+            )
+        else:
+            self._bulk_positions_au = np.empty((self._n_samples, 0, 3), dtype=np.float64)
+        self._bulk_polydata: pv.PolyData | None = None
+
         self._build_scene()
 
     # --- Public surface --------------------------------------------------
@@ -134,10 +166,18 @@ class Viewer:
             pos = self._positions_au[name][sample_idx]
             actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
         if self._label_polydata is not None:
+            # Only the labelled bodies (massive + few-particle case) are
+            # in `_label_polydata`; the bulk cohort doesn't get labels.
+            labelled = [n for n in self._body_names if n not in self._bulk_cohort_set]
             self._label_polydata.points = np.array(
-                [self._positions_au[n][sample_idx] for n in self._body_names],
+                [self._positions_au[n][sample_idx] for n in labelled],
                 dtype=np.float64,
             )
+        if self._bulk_polydata is not None:
+            # One contiguous slice write — VTK picks up the change on
+            # the next render. Cost is O(n_bulk) per frame regardless
+            # of cohort size.
+            self._bulk_polydata.points = self._bulk_positions_au[sample_idx]
         # Follow-body camera: re-center the focal point on the followed body
         # each frame so it stays fixed in the viewport while everything else
         # moves around it. Without this, the camera stays at SSB and the
@@ -162,14 +202,19 @@ class Viewer:
         self._plotter.set_background("black")  # type: ignore[arg-type]
         self._add_trails()
         self._add_bodies()
+        self._add_bulk_points()
         self._add_labels()
         self._set_top_down_camera()
         if self._n_samples > 1:
             self._add_time_slider()
 
     def _add_trails(self) -> None:
-        """Full-history polyline per body, rendered once up front."""
+        """Full-history polyline per body, rendered once up front. Skipped
+        for the bulk cohort — drawing 1,000 polylines drowns the scene
+        and tanks the framerate."""
         for name, pts in self._positions_au.items():
+            if name in self._bulk_cohort_set:
+                continue
             if len(pts) < 2:
                 continue
             color = _color_for(name)
@@ -180,6 +225,8 @@ class Viewer:
 
     def _add_bodies(self) -> None:
         for name, pts in self._positions_au.items():
+            if name in self._bulk_cohort_set:
+                continue
             radius_au = _display_radius_au(name, self._scaling)
             sphere = pv.Sphere(radius=radius_au, center=(0.0, 0.0, 0.0))
             actor = self._plotter.add_mesh(
@@ -187,6 +234,24 @@ class Viewer:
             )
             actor.position = (float(pts[0, 0]), float(pts[0, 1]), float(pts[0, 2]))
             self._body_actors[name] = actor
+
+    def _add_bulk_points(self) -> None:
+        """Single PolyData containing one vertex per bulk-cohort particle,
+        rendered as point sprites. `set_sample` mutates `points` in-place;
+        VTK picks up the change on the next render. O(n_bulk) per frame
+        regardless of cohort size — this is what makes 1,000-asteroid
+        scenarios interactive."""
+        if not self._bulk_cohort:
+            return
+        # Initial positions are sample 0; set_sample will rewrite them.
+        self._bulk_polydata = pv.PolyData(self._bulk_positions_au[0])
+        self._plotter.add_mesh(
+            self._bulk_polydata,
+            color=_BULK_POINT_COLOR_HEX,
+            render_points_as_spheres=True,
+            point_size=4,
+            opacity=0.85,
+        )
 
     def _add_labels(self) -> None:
         """Body-name labels that track each body as the slider scrubs.
@@ -198,15 +263,22 @@ class Viewer:
         `set_sample` can mutate `_label_polydata.points` and the label
         hierarchy follows on the next render. Anchor dots are
         suppressed — the body sphere is the only marker.
+
+        Bulk-cohort particles are skipped: 1,000 floating name labels
+        is unreadable, and the rendering cost would defeat the whole
+        point of the bulk path.
         """
+        labelled = [n for n in self._body_names if n not in self._bulk_cohort_set]
+        if not labelled:
+            return
         points = np.array(
-            [self._positions_au[n][0] for n in self._body_names],
+            [self._positions_au[n][0] for n in labelled],
             dtype=np.float64,
         )
         self._label_polydata = pv.PolyData(points)
         labels_arr = vtk.vtkStringArray()
         labels_arr.SetName("labels")
-        for name in self._body_names:
+        for name in labelled:
             labels_arr.InsertNextValue(name)
         self._label_polydata.GetPointData().AddArray(labels_arr)
         self._plotter.add_point_labels(

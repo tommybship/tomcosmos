@@ -176,6 +176,88 @@ def test_follow_camera_focal_point_tracks_body() -> None:
     assert not np.allclose(focal_0, focal_last)
 
 
+def _bulk_test_particle_scenario(n: int) -> Scenario:
+    """Sun plus `n` synthetic test particles on circular orbits — used
+    for the bulk-cohort viewer path test."""
+    import math
+
+    rng = np.random.default_rng(0)
+    bodies = [{
+        "name": "sun", "mass_kg": 1.989e30, "radius_km": 695700.0,
+        "ic": {"source": "explicit", "r": [0, 0, 0], "v": [0, 0, 0]},
+    }]
+    test_particles = []
+    for i in range(n):
+        a_au = 1.5 + 0.005 * i
+        a_km = a_au * AU_KM
+        ph = float(rng.uniform(0, 2 * math.pi))
+        speed = 29.7847 / math.sqrt(a_au)
+        test_particles.append({
+            "name": f"p{i:04d}",
+            "ic": {
+                "type": "explicit", "frame": "icrf_barycentric",
+                "r": [a_km * math.cos(ph), a_km * math.sin(ph), 0.0],
+                "v": [-speed * math.sin(ph), speed * math.cos(ph), 0.0],
+            },
+        })
+    return Scenario.model_validate({
+        "schema_version": 1, "name": "bulk-test",
+        "epoch": "2026-01-01T00:00:00 TDB", "duration": "365 day",
+        "integrator": {"name": "whfast", "timestep": "5 day"},
+        "output": {"format": "parquet", "cadence": "30 day"},
+        "bodies": bodies, "test_particles": test_particles,
+    })
+
+
+def test_viewer_bulk_cohort_activates_above_threshold() -> None:
+    """When a scenario declares more test particles than the bulk
+    threshold, the viewer renders them as a single PolyData cloud
+    instead of N sphere actors. Massive bodies (the Sun here) keep
+    the per-body actor treatment regardless."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+
+    history = run(_bulk_test_particle_scenario(50), source=_NoEphemerisNeeded())
+    viewer = Viewer(history, off_screen=True)
+    # Sun stays as an actor; 50 test particles go to the bulk cohort.
+    assert "sun" in viewer._body_actors  # noqa: SLF001
+    assert len(viewer._bulk_cohort) == 50  # noqa: SLF001
+    assert viewer._bulk_polydata is not None  # noqa: SLF001
+    # The bulk cohort has no per-body actors — that's the whole point.
+    for name in viewer._bulk_cohort:  # noqa: SLF001
+        assert name not in viewer._body_actors  # noqa: SLF001
+
+
+def test_viewer_bulk_cohort_set_sample_updates_polydata() -> None:
+    """`set_sample` mutates the bulk PolyData's points in-place; after
+    a scrub, the points coordinate at the rendered sample matches the
+    history's positions for the bulk cohort. Trip wire for the
+    points-update path silently no-op'ing in a future refactor."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+
+    n_tp = 50
+    history = run(_bulk_test_particle_scenario(n_tp), source=_NoEphemerisNeeded())
+    viewer = Viewer(history, off_screen=True)
+
+    target_idx = history.n_samples // 2
+    viewer.set_sample(target_idx)
+
+    rendered = np.asarray(viewer._bulk_polydata.points)  # noqa: SLF001
+    assert rendered.shape == (n_tp, 3)
+    expected = viewer._bulk_positions_au[target_idx]  # noqa: SLF001
+    np.testing.assert_allclose(rendered, expected, atol=1e-12)
+
+
+def test_viewer_below_threshold_uses_per_body_actors() -> None:
+    """A 2-body scenario stays on the per-body actor path — the bulk
+    cohort kicks in only when it earns its keep."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+
+    viewer = Viewer(_fresh_history(), off_screen=True)
+    assert viewer._bulk_cohort == ()  # noqa: SLF001
+    assert viewer._bulk_polydata is None  # noqa: SLF001
+    assert {"sun", "earth"} <= set(viewer._body_actors)  # noqa: SLF001
+
+
 def test_follow_camera_does_not_apply_in_default_mode() -> None:
     """Without follow, the focal point stays at the SSB origin throughout."""
     from tomcosmos.viz.pyvista_viewer import Viewer
