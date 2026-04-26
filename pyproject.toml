@@ -38,6 +38,13 @@ dependencies = [
 # When not installed, tomcosmos falls back to a Python 1PN GR implementation
 # automatically — the `effects: [gr]` toggle still works either way.
 reboundx = ["reboundx>=4.6,<5"]
+# Optional: ASSIST for high-precision ephemeris-aware integration. Scenarios
+# with `integrator.ephemeris_perturbers=True` require this; everything else
+# continues to use vanilla REBOUND. Linux/macOS: `pip install assist`.
+# Windows: ASSIST upstream doesn't build with MSVC; install from our fork
+# until the port lands upstream:
+#   pip install git+https://github.com/tommybship/assist.git@windows-msvc-build
+assist = ["assist>=1.1.9"]
 dev = [
     "pytest>=8,<9",
     "pytest-xdist>=3.5,<4",
@@ -115,5 +122,6 @@ markers = [
     "physics: physics-invariant tests (medium speed)",
     "ephemeris: ephemeris-agreement tests (slow, network/kernel access)",
     "viewer: viewer snapshot tests (require display or offscreen GL)",
+    "assist: ASSIST-integrator tests (require DE440 + sb441-n16 kernels, ~730 MB)",
 ]
 addopts = "-ra --strict-markers"

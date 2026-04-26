@@ -40,3 +40,10 @@ dependencies:
       # we switch this back to `reboundx>=4.6,<5` from PyPI.
       # Tracks https://github.com/dtamayo/reboundx/issues/137 et al.
       - git+https://github.com/tommybship/reboundx.git@windows-msvc-build
+      # ASSIST — JPL high-precision ephemeris-aware integrator (built
+      # on REBOUND). Scenarios with `integrator.ephemeris_perturbers=True`
+      # use it; everything else continues to use vanilla REBOUND. Same
+      # Windows-MSVC build saga as REBOUNDx, so we install from our fork
+      # at the matching branch until upstream merges. Tracks
+      # https://github.com/matthewholman/assist (no Windows port upstream).
+      - git+https://github.com/tommybship/assist.git@windows-msvc-build

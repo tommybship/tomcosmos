@@ -249,6 +249,23 @@ class IntegratorConfig(_StrictModel):
     divergence_threshold: float | None = Field(default=None, gt=0)
     r_crit_hill: float | None = Field(default=None, gt=0)
     effects: list[Literal["gr"]] = Field(default_factory=list)
+    ephemeris_perturbers: bool = False
+    """When True, the integrator backend wraps REBOUND with ASSIST's
+    `Extras` and applies high-precision gravitational perturbations
+    from the Sun, planets, Moon, and 16 large asteroids using
+    DE440/sb441-n16 kernels read directly in the force loop. Adds
+    GR (1PN) and J2 oblateness for the major bodies as well — these
+    are part of ASSIST's default force set, not optional toggles.
+
+    Massive bodies in the scenario become ill-defined when this is
+    on (the planets are already in the ephemeris; adding them as
+    integrated particles double-counts gravity). The runner enforces
+    this: with ephemeris_perturbers=True, only test particles are
+    allowed.
+
+    Off by default to keep M1-M4 scenarios behavior-equivalent to
+    vanilla REBOUND. Turn on for asteroid-tracking and accurate
+    small-body work (M5)."""
 
     @model_validator(mode="after")
     def _timestep_matches_integrator(self) -> IntegratorConfig:
@@ -282,9 +299,22 @@ class Scenario(_StrictModel):
     epoch: Epoch
     duration: Duration
     integrator: IntegratorConfig
-    bodies: list[Body] = Field(min_length=1)
+    # Vanilla REBOUND scenarios need at least one massive body for the
+    # integration to mean anything; ASSIST's `ephemeris_perturbers`
+    # mode supplies all the gravity from kernels and runs with
+    # zero `bodies`. Enforced by `_bodies_required_unless_ephemeris`.
+    bodies: list[Body] = Field(default_factory=list)
     test_particles: list[TestParticle] = Field(default_factory=list)
     output: OutputConfig
+
+    @model_validator(mode="after")
+    def _bodies_required_unless_ephemeris(self) -> Scenario:
+        if not self.integrator.ephemeris_perturbers and not self.bodies:
+            raise ValueError(
+                "scenario must declare at least one body unless "
+                "integrator.ephemeris_perturbers=True"
+            )
+        return self
 
     @model_validator(mode="after")
     def _unique_names(self) -> Scenario:
@@ -319,6 +349,24 @@ class Scenario(_StrictModel):
                             f"{role} {entity.name!r}: dv event t_offset "
                             f"{t_s} s must be in (0, {duration_s} s)"
                         )
+        return self
+
+    @model_validator(mode="after")
+    def _ephemeris_perturbers_no_massive_bodies(self) -> Scenario:
+        """ASSIST's `ephemeris_perturbers` mode reads the major bodies
+        (Sun, planets, Moon, 16 asteroid perturbers) directly from
+        DE440/sb441-n16 and applies their gravity in the force loop.
+        Adding those same bodies as integrated particles double-counts
+        gravity. Reject any massive Body when the flag is on.
+
+        Test particles are fine — they're what ASSIST is for."""
+        if self.integrator.ephemeris_perturbers and self.bodies:
+            raise ValueError(
+                f"integrator.ephemeris_perturbers=True is incompatible with "
+                f"declared bodies ({[b.name for b in self.bodies]}); the "
+                "major-body gravity comes from ASSIST's ephemeris kernels. "
+                "Move what you're integrating into `test_particles`."
+            )
         return self
 
     @model_validator(mode="after")
