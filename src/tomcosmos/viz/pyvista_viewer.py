@@ -26,6 +26,7 @@ import numpy as np
 import pyvista as pv
 import vtk
 from astropy import units as u
+from astropy.time import TimeDelta
 
 from tomcosmos.constants import resolve_body_constant
 from tomcosmos.exceptions import UnknownBodyError
@@ -123,7 +124,7 @@ class Viewer:
         self._current_sample = 0
         self._plotter = pv.Plotter(off_screen=off_screen, title="tomcosmos")
         self._body_actors: dict[str, pv.Actor] = {}
-        self._label_polydata: pv.PolyData | None = None
+        self._label_actors: dict[str, vtk.vtkBillboardTextActor3D] = {}
 
         # Decide which names render as the bulk point cloud vs. as
         # individual sphere actors. Only test particles are eligible —
@@ -144,7 +145,8 @@ class Viewer:
         else:
             self._bulk_positions_au = np.empty((self._n_samples, 0, 3), dtype=np.float64)
         self._bulk_polydata: pv.PolyData | None = None
-
+        self._time_overlay_actor: object | None = None
+        self._build_time_axis()
         self._build_scene()
 
     # --- Public surface --------------------------------------------------
@@ -174,14 +176,9 @@ class Viewer:
         for name, actor in self._body_actors.items():
             pos = self._positions_au[name][sample_idx]
             actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
-        if self._label_polydata is not None:
-            # Only the labelled bodies (massive + few-particle case) are
-            # in `_label_polydata`; the bulk cohort doesn't get labels.
-            labelled = [n for n in self._body_names if n not in self._bulk_cohort_set]
-            self._label_polydata.points = np.array(
-                [self._positions_au[n][sample_idx] for n in labelled],
-                dtype=np.float64,
-            )
+        for name, label_actor in self._label_actors.items():
+            pos = self._positions_au[name][sample_idx]
+            label_actor.SetPosition(float(pos[0]), float(pos[1]), float(pos[2]))
         if self._bulk_polydata is not None:
             # One contiguous slice write — VTK picks up the change on
             # the next render. Cost is O(n_bulk) per frame regardless
@@ -203,6 +200,10 @@ class Viewer:
             cam.focal_point = (float(new_focal[0]), float(new_focal[1]), float(new_focal[2]))
             new_pos = new_focal + offset
             cam.position = (float(new_pos[0]), float(new_pos[1]), float(new_pos[2]))
+        if self._time_overlay_actor is not None:
+            # CornerAnnotation: SetText(corner_idx, text). pyvista's
+            # position="upper_left" maps to VTK corner index 2.
+            self._time_overlay_actor.SetText(2, self._abs_time_strs[sample_idx])
         self._current_sample = sample_idx
 
     # --- Scene construction ---------------------------------------------
@@ -214,8 +215,52 @@ class Viewer:
         self._add_bulk_points()
         self._add_labels()
         self._set_top_down_camera()
+        self._add_time_overlay()
         if self._n_samples > 1:
             self._add_time_slider()
+
+    def _build_time_axis(self) -> None:
+        """Pre-compute per-sample time axis: seconds-from-epoch, the
+        slider's chosen unit, and absolute timestamp strings.
+
+        Done once in __init__ so the slider callback and overlay update
+        don't pay astropy cost per scrub. For a 36k-sample run, this is
+        ~few-MB of strings — negligible.
+        """
+        df = self._history.df.sort_values("sample_idx")
+        per_sample = df.drop_duplicates("sample_idx", keep="first")
+        t_seconds = per_sample["t_tdb"].to_numpy(dtype=np.float64)
+
+        total_days = float(t_seconds[-1]) / 86400.0 if t_seconds.size else 0.0
+        if total_days <= 30.0:
+            unit_name, unit_seconds = "hour", 3600.0
+        elif total_days <= 5.0 * 365.25:
+            unit_name, unit_seconds = "day", 86400.0
+        else:
+            unit_name, unit_seconds = "year", 365.25 * 86400.0
+        self._slider_unit_name = unit_name
+        self._t_per_sample_in_unit = t_seconds / unit_seconds
+
+        epoch = self._history.scenario.epoch
+        times = epoch + TimeDelta(t_seconds, format="sec")
+        # times.tdb.isot returns an ndarray of strings; coerce to a list
+        # for cheap indexed access in set_sample.
+        self._abs_time_strs: list[str] = [
+            f"T = {s} TDB" for s in np.atleast_1d(times.tdb.isot).tolist()
+        ]
+
+    def _add_time_overlay(self) -> None:
+        """Top-left text actor showing the current sample's absolute
+        timestamp in TDB. Mutated in place by `set_sample`."""
+        if not self._abs_time_strs:
+            return
+        self._time_overlay_actor = self._plotter.add_text(
+            self._abs_time_strs[0],
+            position="upper_left",
+            font_size=10,
+            color="white",
+            name="time_overlay",
+        )
 
     def _add_trails(self) -> None:
         """Full-history polyline per body, rendered once up front. Skipped
@@ -288,13 +333,16 @@ class Viewer:
     def _add_labels(self) -> None:
         """Body-name labels that track each body as the slider scrubs.
 
-        We attach labels as a point-data string array and pass its
-        *name* to `add_point_labels`. Pyvista's list-of-labels path
-        deep-copies the input polydata, which would freeze the labels;
-        the named-array path keeps the dataset by reference, so
-        `set_sample` can mutate `_label_polydata.points` and the label
-        hierarchy follows on the next render. Anchor dots are
-        suppressed — the body sphere is the only marker.
+        Each labelled body gets its own `vtkBillboardTextActor3D` —
+        a 3D-anchored text actor that always faces the camera and
+        renders at a fixed pixel size regardless of zoom. We chose
+        billboard actors over `add_point_labels` (which uses
+        `vtkLabelHierarchy`) because the hierarchy builds an octree
+        from the polydata's bounding box at construction time and
+        then culls points whose later positions fall outside it —
+        producing the symptom of labels visible only in the time band
+        where bodies are near their initial positions, and disappearing
+        before / after as orbits carry them away.
 
         Bulk-cohort particles are skipped: 1,000 floating name labels
         is unreadable, and the rendering cost would defeat the whole
@@ -303,21 +351,17 @@ class Viewer:
         labelled = [n for n in self._body_names if n not in self._bulk_cohort_set]
         if not labelled:
             return
-        points = np.array(
-            [self._positions_au[n][0] for n in labelled],
-            dtype=np.float64,
-        )
-        self._label_polydata = pv.PolyData(points)
-        labels_arr = vtk.vtkStringArray()
-        labels_arr.SetName("labels")
+        renderer = self._plotter.renderer
         for name in labelled:
-            labels_arr.InsertNextValue(name)
-        self._label_polydata.GetPointData().AddArray(labels_arr)
-        self._plotter.add_point_labels(
-            self._label_polydata, "labels",
-            font_size=12, text_color="white",
-            shape=None, always_visible=True, show_points=False,
-        )
+            actor = vtk.vtkBillboardTextActor3D()
+            actor.SetInput(name)
+            tprop = actor.GetTextProperty()
+            tprop.SetColor(1.0, 1.0, 1.0)
+            tprop.SetFontSize(12)
+            pos = self._positions_au[name][0]
+            actor.SetPosition(float(pos[0]), float(pos[1]), float(pos[2]))
+            renderer.AddActor(actor)
+            self._label_actors[name] = actor
 
     def _set_top_down_camera(self) -> None:
         """Frame the scene from +Z looking down at the ecliptic, parallel
@@ -386,17 +430,33 @@ class Viewer:
         self._plotter.camera.parallel_scale = max_r * 1.1
 
     def _add_time_slider(self) -> None:
+        t_axis = self._t_per_sample_in_unit
+        t_max = float(t_axis[-1])
+        n = self._n_samples
+
         def _on_slider(value: float) -> None:
-            self.set_sample(int(round(value)))
+            # Map the slider's continuous time value back to the closest
+            # discrete sample. searchsorted is O(log n) — fine for the
+            # interactive scrub, regardless of run length.
+            i = int(np.searchsorted(t_axis, value))
+            if i >= n:
+                i = n - 1
+            elif i > 0 and abs(t_axis[i] - value) > abs(t_axis[i - 1] - value):
+                i = i - 1
+            self.set_sample(i)
 
         self._plotter.add_slider_widget(
             _on_slider,
-            rng=(0, self._n_samples - 1),
-            value=0,
-            title="sample",
-            pointa=(0.1, 0.05), pointb=(0.9, 0.05),
+            rng=(0.0, t_max),
+            value=0.0,
+            title=f"{self._slider_unit_name} from epoch",
+            # y=0.10 (not 0.05) so the title rendered below the track has
+            # room before the bottom of the window — at 0.05 the title's
+            # descenders clip.
+            pointa=(0.1, 0.10), pointb=(0.9, 0.10),
             style="modern",
             interaction_event="always",
+            fmt="%.2f",
         )
 
 

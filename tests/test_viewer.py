@@ -83,24 +83,24 @@ def test_set_sample_updates_positions() -> None:
     assert not np.allclose(p0, p1), "Earth should move across samples"
 
 
-def test_set_sample_updates_label_polydata() -> None:
+def test_set_sample_updates_billboard_labels() -> None:
     """Labels track the bodies, not the t=0 anchor.
 
-    Guards against pyvista's add_point_labels deep-copy gotcha: when
-    `labels` is passed as a Python list (not a point-data array name),
-    the input polydata is copied internally and our handle becomes
-    stale, freezing labels at sample 0.
+    Each labelled body has a `vtkBillboardTextActor3D` whose 3D anchor
+    we mutate per scrub. Guards against the prior pitfall:
+    `add_point_labels` builds a `vtkLabelHierarchy` octree at construction
+    that culls points outside its initial bounds, hiding labels mid-run.
     """
     from tomcosmos.viz.pyvista_viewer import Viewer
     history = _fresh_history()
     viewer = Viewer(history, off_screen=True)
-    assert viewer._label_polydata is not None  # noqa: SLF001
-    earth_idx = viewer.body_names.index("earth")
+    assert "earth" in viewer._label_actors  # noqa: SLF001
+    earth_actor = viewer._label_actors["earth"]  # noqa: SLF001
 
     viewer.set_sample(0)
-    p0 = viewer._label_polydata.points[earth_idx].copy()  # noqa: SLF001
+    p0 = np.array(earth_actor.GetPosition(), dtype=np.float64)
     viewer.set_sample(history.n_samples - 1)
-    p1 = viewer._label_polydata.points[earth_idx]  # noqa: SLF001
+    p1 = np.array(earth_actor.GetPosition(), dtype=np.float64)
 
     assert not np.allclose(p0, p1), "Earth label should move with the body"
     assert np.allclose(p1, viewer._positions_au["earth"][-1])  # noqa: SLF001
