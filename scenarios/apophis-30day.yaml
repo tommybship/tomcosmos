@@ -1,0 +1,33 @@
+schema_version: 1
+name: apophis-30day
+# 30-day Mode A propagation of asteroid 99942 Apophis. Uses ASSIST's
+# DE440 + sb441-n16 force loop directly — same physics JPL Horizons
+# uses to publish small-body ephemerides — so this run agrees with
+# Horizons to < 100 m over 30 days (verified in tests/test_sbdb.py).
+#
+# Requires the ASSIST kernels:
+#   tomcosmos fetch-kernels --include assist
+# (~770 MB one-time download; full DE440 + sb441-n16.)
+#
+# IC was snapshotted from JPL SBDB at the orbit-determination
+# element epoch (2025-11-21 TDB). The state vector is heliocentric
+# Keplerian elements converted to ICRF barycentric (r_km, v_kms)
+# via tomcosmos.targeting.sbdb. To refresh against the latest
+# orbit determination — JPL re-fits asteroid orbits as new
+# observations land — re-run scripts/refresh_apophis_scenario.py
+# and it overwrites the values below.
+epoch: "2025-11-21T00:00:00 TDB"
+duration: "30 day"
+integrator:
+  name: ias15
+  ephemeris_perturbers: true
+output:
+  format: parquet
+  cadence: "1 day"
+test_particles:
+  - name: apophis
+    ic:
+      type: explicit
+      frame: icrf_barycentric
+      r: [-12250616.879867043, -115773683.57308751, -43340734.19065566]
+      v: [34.42550064716107, 1.8248375505717387, 1.5448272203924498]

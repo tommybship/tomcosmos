@@ -25,12 +25,21 @@ def test_committed_scenario_loads(scenario_path: Path) -> None:
     """Every scenario in scenarios/ must parse and pass schema validation.
 
     This is the cheap structural check; ephemeris/IC resolution lives in
-    a separate test that gates on kernel availability.
+    a separate test that gates on kernel availability. Mode A scenarios
+    (`integrator.ephemeris_perturbers=True`) have `bodies: []` by
+    construction — the schema validator already rejects mismatches
+    between mode and body count, so we don't re-assert here.
     """
     scenario = Scenario.from_yaml(scenario_path)
     assert scenario.schema_version == 1
     assert scenario.name
-    assert scenario.bodies
+    if scenario.integrator.ephemeris_perturbers:
+        assert scenario.bodies == []
+        assert scenario.test_particles, (
+            "Mode A scenario must declare at least one test particle"
+        )
+    else:
+        assert scenario.bodies
 
 
 @pytest.mark.ephemeris

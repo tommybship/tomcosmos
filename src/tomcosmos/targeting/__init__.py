@@ -9,8 +9,14 @@ two-body sense, and then construct `DeltaV` events for the scenario
 YAML by hand. Iterating that for fuel-optimal multi-target tours,
 B-plane targeting, or low-thrust optimization is a different product
 (see PLAN.md > Non-goals).
+
+`sbdb` adds JPL Small-Body Database ingest for Mode A asteroid
+scenarios — the IC seeding side of the M5 small-body story.
 """
 from tomcosmos.targeting.lambert import lambert
+from tomcosmos.targeting.sbdb import SBDBOrbit
+from tomcosmos.targeting.sbdb import query as sbdb_query
+from tomcosmos.targeting.sbdb import state_at_epoch as sbdb_state_at_epoch
 from tomcosmos.targeting.transfer import (
     MU_SUN_KM3_S2,
     Transfer,
@@ -19,7 +25,10 @@ from tomcosmos.targeting.transfer import (
 
 __all__ = [
     "MU_SUN_KM3_S2",
+    "SBDBOrbit",
     "Transfer",
     "compute_transfer",
     "lambert",
+    "sbdb_query",
+    "sbdb_state_at_epoch",
 ]
