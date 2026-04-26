@@ -625,11 +625,14 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     - Test that Horizons-at-element-epoch agrees with SBDB-Kepler-at-element-epoch (<1 km, float-precision noise — proves both paths read the same underlying orbit fit).
     - Test that 3 NEOs ingested from Horizons propagate sanely in Mode A for 30 days (no blowup, no solar plunge, no escape).
 
+    Also landed (slice 2):
+    - **Runner vectorization.** `runner.py` now builds StateHistory column-major: every output column is a pre-allocated numpy array, and the integration loop's per-sample cost is one `sim.serialize_particle_data` call (C-side bulk copy) plus six numpy slice writes. Zero per-particle Python work in the hot path. 100-test-particle Mode B run: 1.6 s for 365 days at 5-day cadence (regression test).
+    - **Per-process kernel SHA cache.** `io.diagnostics._sha256_file` memoizes by `(path, mtime_ns, size)`; the first `run()` in a process pays the SHA cost once (~10 s for the full DE440 + satellite + sb441-n16 set), subsequent calls return cached. Test suite walltime dropped from ~3:57 to ~21 s — 11× speedup, dominated by this single fix. mtime+size key invalidates on any file replacement, preserving "metadata reflects reality" semantics.
+
     Still ahead for M5b:
-    - **Runner perf.** `runner._row` is per-body-per-sample dict construction; for 1,000 bodies × 100 samples that's ~100k Python dict allocations. Vectorize via numpy slicing across `sim.particles` so the per-sample cost is one loop, not N loops.
     - **Viewer scale.** PyVista's per-body actor model breaks at ~1,000 asteroids. Refactor `viz.pyvista_viewer` to use a points-based renderer (`add_points` / poly-data with one vertex per body, updated in-place) for the asteroid case, while keeping the per-body actor path for Mode B planet scenarios.
     - **1,000-body demo scenario.** `scenarios/neos-bulk.yaml` ingesting a real NEO catalog filter (e.g. all numbered NEOs above some H-magnitude threshold) and a viewer pass that demonstrates interactive framerate.
-    - **`analysis/encounters.py` against Mode A.** Existing Hill-sphere detector loops bodies × test_particles; for 1,000 asteroids × 8 planets it's ~8k vector ops per sample, should be fine. Quick benchmark to confirm.
+    - **`analysis/encounters.py` for Mode A.** Current detector pairs test particles with `scenario.bodies`; in Mode A `bodies==[]` so it does nothing. Wire it to detect encounters with the ASSIST-driven major bodies (planets, Moon) instead.
     - **Mode A `energy_rel_err` cleanup.** `sim.energy()` doesn't capture ASSIST's external forces, so the column is always 0.0 in Mode A. Either compute a Mode-A-aware diagnostic (heliocentric-distance-vs-Kepler-baseline?) or document the column as N/A in Mode A.
 
   - **Cross-cutting fixes that landed alongside M5a:**

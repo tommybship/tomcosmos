@@ -100,8 +100,40 @@ def run(
     burn_timeline = _build_burn_timeline(scenario, time_unit_s, vel_to_kms)
     e0 = sim.energy()
 
+    # Names in the order they were added — bodies first, then test particles —
+    # which matches REBOUND's particle-array indexing. Both ASSIST and Mode B
+    # paths preserve insertion order, so a single name list lets us skip
+    # per-particle hash lookups inside the integration loop.
+    all_names: list[str] = [b.name for b in bodies] + [p.name for p in particles]
+    n_particles = len(all_names)
+    n_samples = len(sample_offsets_s)
+    n_rows = n_samples * n_particles
+
+    # Pre-allocate every output column once, then fill via numpy slice
+    # assignment inside the integration loop. The integration body does
+    # zero per-particle Python work — `serialize_particle_data` is one
+    # C-side copy of every particle's state; the assembly below is six
+    # contiguous-stride slice writes plus four constant-fill writes.
+    # For 1,000 bodies × 365 samples that's six 365k-element numpy
+    # operations vs the previous 365,000 Python dict allocations.
+    sample_idx_col = np.repeat(np.arange(n_samples, dtype=np.int64), n_particles)
+    t_tdb_col = np.repeat(np.asarray(sample_offsets_s, dtype=np.float64), n_particles)
+    body_col = np.tile(np.asarray(all_names, dtype=object), n_samples)
+    x_col = np.empty(n_rows, dtype=np.float64)
+    y_col = np.empty(n_rows, dtype=np.float64)
+    z_col = np.empty(n_rows, dtype=np.float64)
+    vx_col = np.empty(n_rows, dtype=np.float64)
+    vy_col = np.empty(n_rows, dtype=np.float64)
+    vz_col = np.empty(n_rows, dtype=np.float64)
+    energy_col = np.empty(n_rows, dtype=np.float64)
+    terminated_col = np.zeros(n_rows, dtype=bool)
+
+    # Buffers REBOUND's serialize_particle_data writes into — flat 3*N
+    # arrays per its contract.
+    xyz_buf = np.empty(3 * n_particles, dtype=np.float64)
+    vxvyvz_buf = np.empty(3 * n_particles, dtype=np.float64)
+
     start = datetime.now(UTC)
-    records: list[dict[str, object]] = []
     dv_events: list[DeltaVEvent] = []
     burn_idx = 0
     for sample_idx, sample_offset_s in enumerate(sample_offsets_s):
@@ -109,8 +141,7 @@ def run(
 
         # Apply any burns scheduled at or before this sample. Integrate
         # to the burn instant, modify the particle's velocity, continue.
-        # Preserves the discontinuous-impulse model exactly across
-        # whfast / ias15 / mercurius.
+        # Burns are discrete per-particle events — not vectorizable.
         while (
             burn_idx < len(burn_timeline)
             and burn_timeline[burn_idx][0] <= sample_offset_s
@@ -131,33 +162,33 @@ def run(
 
         sim.integrate(sample_sim_t)
         rel_err = abs((sim.energy() - e0) / e0) if e0 != 0 else 0.0
-        for body in bodies:
-            records.append(_row(
-                sample_idx, sample_offset_s, body.name, sim,
-                pos_to_km, vel_to_kms, rel_err,
-            ))
-        for particle in particles:
-            records.append(_row(
-                sample_idx, sample_offset_s, particle.name, sim,
-                pos_to_km, vel_to_kms, rel_err,
-            ))
+
+        sim.serialize_particle_data(xyz=xyz_buf, vxvyvz=vxvyvz_buf)
+        row_start = sample_idx * n_particles
+        row_end = row_start + n_particles
+        # Strided views: xyz_buf[0::3] = x of every particle, etc.
+        x_col[row_start:row_end]  = xyz_buf[0::3] * pos_to_km
+        y_col[row_start:row_end]  = xyz_buf[1::3] * pos_to_km
+        z_col[row_start:row_end]  = xyz_buf[2::3] * pos_to_km
+        vx_col[row_start:row_end] = vxvyvz_buf[0::3] * vel_to_kms
+        vy_col[row_start:row_end] = vxvyvz_buf[1::3] * vel_to_kms
+        vz_col[row_start:row_end] = vxvyvz_buf[2::3] * vel_to_kms
+        energy_col[row_start:row_end] = rel_err
     end = datetime.now(UTC)
 
-    df = pd.DataFrame.from_records(records, columns=list(COLUMNS)).astype(
-        {
-            "sample_idx": "int64",
-            "t_tdb": "float64",
-            "body": "string",
-            "x": "float64",
-            "y": "float64",
-            "z": "float64",
-            "vx": "float64",
-            "vy": "float64",
-            "vz": "float64",
-            "terminated": "bool",
-            "energy_rel_err": "float64",
-        }
-    )
+    df = pd.DataFrame({
+        "sample_idx": sample_idx_col,
+        "t_tdb": t_tdb_col,
+        "body": pd.array(body_col, dtype="string"),
+        "x": x_col,
+        "y": y_col,
+        "z": z_col,
+        "vx": vx_col,
+        "vy": vy_col,
+        "vz": vz_col,
+        "terminated": terminated_col,
+        "energy_rel_err": energy_col,
+    }, columns=list(COLUMNS))
 
     metadata = capture_metadata(
         scenario, source, start, end, allow_dirty=allow_dirty
@@ -271,31 +302,6 @@ def _sample_grid_seconds(scenario: Scenario) -> list[float]:
         raise ValueError("output cadence must be positive")
     n_samples = int(math.floor(duration_s / cadence_s)) + 1
     return [i * cadence_s for i in range(n_samples)]
-
-
-def _row(
-    sample_idx: int,
-    t_offset_s: float,
-    name: str,
-    sim: rebound.Simulation,
-    pos_to_km: float,
-    vel_to_kms: float,
-    energy_rel_err: float,
-) -> dict[str, object]:
-    p = sim.particles[rebound.hash(name)]
-    return {
-        "sample_idx": sample_idx,
-        "t_tdb": t_offset_s,
-        "body": name,
-        "x": p.x * pos_to_km,
-        "y": p.y * pos_to_km,
-        "z": p.z * pos_to_km,
-        "vx": p.vx * vel_to_kms,
-        "vy": p.vy * vel_to_kms,
-        "vz": p.vz * vel_to_kms,
-        "terminated": False,
-        "energy_rel_err": energy_rel_err,
-    }
 
 
 __all__ = ["run", "resolve_output_path", "StateHistory", "ResolvedBody", "ResolvedTestParticle"]

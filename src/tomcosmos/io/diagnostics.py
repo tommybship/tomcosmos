@@ -172,9 +172,26 @@ def _kernel_hashes(source: EphemerisSource) -> dict[str, str]:
     return {p.name: _sha256_file(p) for p in paths if p.exists()}
 
 
+# Process-lifetime SHA256 cache keyed on (absolute_path, mtime_ns, size).
+# Hashing every kernel on every `run()` call dominated wallclock for any
+# realistic kernel set (3 GB+ across DE440 + satellite + sb441-n16 takes
+# ~10 s on a fast SSD). The mtime+size key invalidates if the user
+# manually replaces a kernel file, preserving the "metadata reflects
+# reality" semantics — but two `run()` calls in the same Python process
+# against unchanged kernels share one hash computation.
+_SHA256_CACHE: dict[tuple[str, int, int], str] = {}
+
+
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    cached = _SHA256_CACHE.get(key)
+    if cached is not None:
+        return cached
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             h.update(chunk)
-    return h.hexdigest()
+    digest = h.hexdigest()
+    _SHA256_CACHE[key] = digest
+    return digest

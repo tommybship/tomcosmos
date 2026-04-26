@@ -191,3 +191,63 @@ def test_sun_planets_integrates_and_returns_history(
     # Every body should appear in every sample.
     counts = history.df.groupby("body").size()
     assert (counts == 7).all()
+
+
+# --- Performance regression -------------------------------------------------
+
+
+def test_runner_scales_to_many_test_particles() -> None:
+    """Runner build-up cost scales with N (test particles), not N² or
+    worse. After M5b vectorization the per-sample work is six numpy
+    slice writes plus one C-side serialize_particle_data — there's no
+    Python loop over particles inside the integration step.
+
+    Builds a Sun + 100-test-particle vanilla-REBOUND (Mode B) scenario
+    with random circular IC seeds and integrates for 1 yr. Bound:
+    completes in <3 s on a CI worker. Pre-vectorization this took
+    ~10 s+ and was dominated by per-particle dict allocation. Trip
+    wire for any future regression that re-introduces a Python loop
+    in the hot path."""
+    import time
+
+    rng = np.random.default_rng(42)
+    n = 100
+    bodies = [
+        {
+            "name": "sun", "mass_kg": 1.989e30, "radius_km": 695700.0,
+            "ic": {"source": "explicit", "r": [0.0, 0.0, 0.0], "v": [0.0, 0.0, 0.0]},
+        },
+    ]
+    test_particles = []
+    for i in range(n):
+        # Circular orbits between 1.5-2.5 AU, randomized phase.
+        a_au = 1.5 + 0.01 * i
+        a_km = a_au * AU_KM
+        speed = EARTH_SPEED_KMS / math.sqrt(a_au)
+        phi = float(rng.uniform(0, 2 * math.pi))
+        test_particles.append({
+            "name": f"p{i:03d}",
+            "ic": {
+                "type": "explicit",
+                "r": [a_km * math.cos(phi), a_km * math.sin(phi), 0.0],
+                "v": [-speed * math.sin(phi), speed * math.cos(phi), 0.0],
+                "frame": "icrf_barycentric",
+            },
+        })
+    scenario = Scenario.model_validate({
+        "schema_version": 1, "name": "perf-100", "epoch": "2026-01-01T00:00:00 TDB",
+        "duration": "365 day",
+        "integrator": {"name": "whfast", "timestep": "5 day"},
+        "output": {"format": "parquet", "cadence": "5 day"},
+        "bodies": bodies, "test_particles": test_particles,
+    })
+    t0 = time.time()
+    history = run(scenario, source=_NoEphemerisNeeded())
+    elapsed = time.time() - t0
+    # floor(365/5) + 1 = 74 samples × (1 body + 100 test particles).
+    assert len(history.df) == 74 * 101
+    assert elapsed < 3.0, (
+        f"100-particle Mode B run took {elapsed:.2f}s, expected <3s. "
+        "If this regressed, look for a Python loop over particles in "
+        "the runner hot path that should be a numpy slice."
+    )
