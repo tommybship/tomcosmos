@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from astropy.time import Time
 
 from tomcosmos.config import assist_asteroid_kernel, assist_planet_kernel
 from tomcosmos.state.ic import ResolvedTestParticle
@@ -22,6 +23,11 @@ from tomcosmos.state.scenario import IntegratorConfig
 pytestmark = pytest.mark.assist
 
 AU_KM = 1.495978707e8
+
+# Anchor Mode A tests at J2000 — keeps the existing geometry (probe at
+# +1 AU on the x-axis, ~30 km/s tangential) physically meaningful, since
+# DE440 has the Sun and barycentric origin defined consistently there.
+J2000 = Time("2000-01-01T12:00:00", scale="tdb")
 
 
 def _kernels_present() -> bool:
@@ -48,7 +54,7 @@ def test_assist_extras_is_attached_to_simulation() -> None:
         r_km=np.array([1.5e8, 0.0, 0.0]),  # 1 AU on +x
         v_kms=np.array([0.0, 30.0, 0.0]),  # roughly Earth-ish circular speed
     )
-    sim = build_simulation([], [probe], _ephemeris_config())
+    sim = build_simulation([], [probe], _ephemeris_config(), epoch=J2000)
 
     assert hasattr(sim, "_tomcosmos_assist_extras"), \
         "Extras not attached — caller would lose ASSIST's force callback"
@@ -75,8 +81,10 @@ def test_assist_propagates_test_particle_under_solar_gravity() -> None:
     v0 = np.array([0.0, 29.78, 0.0])
     probe = ResolvedTestParticle(name="probe", r_km=r0, v_kms=v0)
 
-    sim = build_simulation([], [probe], _ephemeris_config())
-    sim.integrate(365.25)  # one year, in ASSIST's day-units
+    sim = build_simulation([], [probe], _ephemeris_config(), epoch=J2000)
+    # sim.t starts at days_past_J2000(J2000) = 0; integrate to t = 365.25
+    # = one Julian year in ASSIST's day-units.
+    sim.integrate(365.25)
 
     p = sim.particles[0]
     end_r_km = np.array([p.x, p.y, p.z]) * AU_KM
@@ -158,4 +166,19 @@ def test_assist_rejects_explicit_effects() -> None:
         v_kms=np.array([0.0, 30.0, 0.0]),
     )
     with pytest.raises(ValueError, match="ASSIST already includes GR"):
-        build_simulation([], [probe], cfg)
+        build_simulation([], [probe], cfg, epoch=J2000)
+
+
+def test_assist_requires_explicit_epoch() -> None:
+    """Mode A's force model indexes DE440 by TDB days past J2000, so
+    sim.t must be anchored to a real epoch before integration. Building
+    a Mode A sim without an epoch is a programmer error — the validator
+    should catch it before sim.integrate silently propagates the wrong
+    asteroid environment."""
+    probe = ResolvedTestParticle(
+        name="probe",
+        r_km=np.array([1.5e8, 0.0, 0.0]),
+        v_kms=np.array([0.0, 30.0, 0.0]),
+    )
+    with pytest.raises(ValueError, match=r"requires `epoch`"):
+        build_simulation([], [probe], _ephemeris_config())

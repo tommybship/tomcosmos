@@ -5,6 +5,13 @@ Most of the heavy lifting lives in specialized modules (ephemeris
 query, IC resolution, REBOUND wrapper); this file stitches them
 together and owns the integration loop.
 
+The runner keeps time in **seconds since scenario.epoch** and
+velocities in **km/s** at its boundaries (the StateHistory `t_tdb`
+column, the burn-timeline tuples, the row-emission logic). The sim's
+internal units (Mode B: AU / yr / Msun, Mode A: AU / day / Msun) are
+treated as an implementation detail — `state.sim_units` translates
+them at the I/O boundary so this loop is mode-agnostic.
+
 As of M4, the integration loop interleaves Δv burns with output
 samples: at each step, all burns due before the next sample are
 applied (integrate to burn time, modify particle velocity, continue),
@@ -36,13 +43,11 @@ from tomcosmos.state.ic import (
 )
 from tomcosmos.state.integrator import build_simulation
 from tomcosmos.state.scenario import Scenario
-
-# Conversion factors out of REBOUND's AU/yr unit system back to our I/O
-# boundary (km, km/s, s). Values match astropy's u.AU and u.yr (IAU 2012
-# and Julian year respectively).
-_AU_KM: float = float((1.0 * u.AU).to(u.km).value)
-_YR_S: float = float((1.0 * u.yr).to(u.s).value)
-_AU_PER_YR_TO_KM_PER_S: float = _AU_KM / _YR_S
+from tomcosmos.state.sim_units import (
+    length_unit_to_km,
+    time_unit_in_seconds,
+    velocity_unit_to_kms,
+)
 
 
 def run(
@@ -81,43 +86,61 @@ def run(
     source.require_covers(scenario.epoch, scenario.duration)
 
     bodies, particles = resolve_scenario(scenario, source)
-    sim = build_simulation(bodies, particles, scenario.integrator)
+    sim = build_simulation(
+        bodies, particles, scenario.integrator, epoch=scenario.epoch,
+    )
 
-    sample_times_yr = _sample_grid(scenario)
-    burn_timeline = _build_burn_timeline(scenario)
+    # Cache once; sim.units doesn't change after build_simulation returns.
+    time_unit_s = time_unit_in_seconds(sim)
+    vel_to_kms = velocity_unit_to_kms(sim)
+    pos_to_km = length_unit_to_km(sim)
+    sim_t0 = float(sim.t)  # 0 in Mode B, days-past-J2000 in Mode A
+
+    sample_offsets_s = _sample_grid_seconds(scenario)
+    burn_timeline = _build_burn_timeline(scenario, time_unit_s, vel_to_kms)
     e0 = sim.energy()
 
     start = datetime.now(UTC)
     records: list[dict[str, object]] = []
     dv_events: list[DeltaVEvent] = []
     burn_idx = 0
-    for sample_idx, t_yr in enumerate(sample_times_yr):
-        # Apply any burns scheduled at or before this sample time. We
-        # integrate to the burn time, modify the particle's velocity,
-        # then continue. This preserves the discontinuous-impulse model
-        # exactly across whfast / ias15 / mercurius.
-        while burn_idx < len(burn_timeline) and burn_timeline[burn_idx][0] <= t_yr:
-            t_burn_yr, name, dv_au_yr, dv_kms = burn_timeline[burn_idx]
-            sim.integrate(t_burn_yr)
+    for sample_idx, sample_offset_s in enumerate(sample_offsets_s):
+        sample_sim_t = sim_t0 + sample_offset_s / time_unit_s
+
+        # Apply any burns scheduled at or before this sample. Integrate
+        # to the burn instant, modify the particle's velocity, continue.
+        # Preserves the discontinuous-impulse model exactly across
+        # whfast / ias15 / mercurius.
+        while (
+            burn_idx < len(burn_timeline)
+            and burn_timeline[burn_idx][0] <= sample_offset_s
+        ):
+            t_burn_offset_s, name, dv_sim, dv_kms = burn_timeline[burn_idx]
+            sim.integrate(sim_t0 + t_burn_offset_s / time_unit_s)
             p = sim.particles[rebound.hash(name)]
-            p.vx += float(dv_au_yr[0])
-            p.vy += float(dv_au_yr[1])
-            p.vz += float(dv_au_yr[2])
+            p.vx += float(dv_sim[0])
+            p.vy += float(dv_sim[1])
+            p.vz += float(dv_sim[2])
             dv_events.append(DeltaVEvent(
                 sample_idx=sample_idx,
-                t_tdb=t_burn_yr * _YR_S,
+                t_tdb=t_burn_offset_s,
                 particle=name,
                 dv_kms=(float(dv_kms[0]), float(dv_kms[1]), float(dv_kms[2])),
             ))
             burn_idx += 1
 
-        sim.integrate(t_yr)
+        sim.integrate(sample_sim_t)
         rel_err = abs((sim.energy() - e0) / e0) if e0 != 0 else 0.0
-        t_s = t_yr * _YR_S
         for body in bodies:
-            records.append(_row(sample_idx, t_s, body.name, sim, rel_err))
+            records.append(_row(
+                sample_idx, sample_offset_s, body.name, sim,
+                pos_to_km, vel_to_kms, rel_err,
+            ))
         for particle in particles:
-            records.append(_row(sample_idx, t_s, particle.name, sim, rel_err))
+            records.append(_row(
+                sample_idx, sample_offset_s, particle.name, sim,
+                pos_to_km, vel_to_kms, rel_err,
+            ))
     end = datetime.now(UTC)
 
     df = pd.DataFrame.from_records(records, columns=list(COLUMNS)).astype(
@@ -181,23 +204,27 @@ def resolve_output_path(scenario: Scenario, metadata: RunMetadata) -> Path:
 
 def _build_burn_timeline(
     scenario: Scenario,
+    time_unit_s: float,
+    vel_to_kms: float,
 ) -> list[tuple[float, str, np.ndarray, np.ndarray]]:
-    """Return `(t_yr, name, dv_au_per_yr, dv_kms)` tuples sorted by `t_yr`.
+    """Return `(t_offset_s, name, dv_sim_units, dv_kms)` tuples sorted by `t_offset_s`.
 
     Burns are pulled from every body and test particle in the scenario,
     transformed from their declared frame into ICRF, and converted from
-    km/s into REBOUND's AU/yr units in one pass. The original km/s
-    vector is preserved in the returned tuple for the event log so we
-    don't have to round-trip the conversion later.
+    km/s into the sim's native velocity unit (AU/yr in Mode B,
+    AU/day in Mode A). The original km/s vector is preserved in the
+    returned tuple for the event log so we don't have to round-trip
+    the conversion later.
     """
+    del time_unit_s  # currently unused; the dv conversion goes via vel_to_kms
     burns: list[tuple[float, str, np.ndarray, np.ndarray]] = []
     for entity in (*scenario.bodies, *scenario.test_particles):
         for ev in entity.dv_events:
-            t_yr = float(ev.t_offset.to(u.yr).value)
+            t_offset_s = float(ev.t_offset.to(u.s).value)
             dv_kms = np.asarray(ev.dv, dtype=np.float64)
             dv_icrf = _dv_to_icrf(dv_kms, ev.frame)
-            dv_au_yr = dv_icrf / _AU_PER_YR_TO_KM_PER_S
-            burns.append((t_yr, entity.name, dv_au_yr, dv_icrf))
+            dv_sim = dv_icrf / vel_to_kms
+            burns.append((t_offset_s, entity.name, dv_sim, dv_icrf))
     burns.sort(key=lambda b: b[0])
     return burns
 
@@ -230,39 +257,42 @@ def _merge_event_logs(
     return merged.sort_values(["t_tdb", "kind"]).reset_index(drop=True)
 
 
-def _sample_grid(scenario: Scenario) -> list[float]:
-    """Sample times in years, inclusive of 0 and the final whole-cadence step.
+def _sample_grid_seconds(scenario: Scenario) -> list[float]:
+    """Sample times as seconds-since-epoch, inclusive of 0 and the final
+    whole-cadence step.
 
-    If the duration isn't an integer multiple of the cadence, the last sample
-    lands at `n * cadence`, not at `duration` — the scenario's tail is
-    trimmed to the last full cadence.
+    If the duration isn't an integer multiple of the cadence, the last
+    sample lands at `n * cadence`, not at `duration` — the scenario's
+    tail is trimmed to the last full cadence.
     """
-    duration_yr = float(scenario.duration.to(u.yr).value)
-    cadence_yr = float(scenario.output.cadence.to(u.yr).value)
-    if cadence_yr <= 0:
+    duration_s = float(scenario.duration.to(u.s).value)
+    cadence_s = float(scenario.output.cadence.to(u.s).value)
+    if cadence_s <= 0:
         raise ValueError("output cadence must be positive")
-    n_samples = int(math.floor(duration_yr / cadence_yr)) + 1
-    return [i * cadence_yr for i in range(n_samples)]
+    n_samples = int(math.floor(duration_s / cadence_s)) + 1
+    return [i * cadence_s for i in range(n_samples)]
 
 
 def _row(
     sample_idx: int,
-    t_s: float,
+    t_offset_s: float,
     name: str,
     sim: rebound.Simulation,
+    pos_to_km: float,
+    vel_to_kms: float,
     energy_rel_err: float,
 ) -> dict[str, object]:
     p = sim.particles[rebound.hash(name)]
     return {
         "sample_idx": sample_idx,
-        "t_tdb": t_s,
+        "t_tdb": t_offset_s,
         "body": name,
-        "x": p.x * _AU_KM,
-        "y": p.y * _AU_KM,
-        "z": p.z * _AU_KM,
-        "vx": p.vx * _AU_PER_YR_TO_KM_PER_S,
-        "vy": p.vy * _AU_PER_YR_TO_KM_PER_S,
-        "vz": p.vz * _AU_PER_YR_TO_KM_PER_S,
+        "x": p.x * pos_to_km,
+        "y": p.y * pos_to_km,
+        "z": p.z * pos_to_km,
+        "vx": p.vx * vel_to_kms,
+        "vy": p.vy * vel_to_kms,
+        "vz": p.vz * vel_to_kms,
         "terminated": False,
         "energy_rel_err": energy_rel_err,
     }

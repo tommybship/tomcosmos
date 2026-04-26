@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import rebound
 from astropy import units as u
+from astropy.time import Time
 
 from tomcosmos.state.effects import attach_gr
 from tomcosmos.state.ic import ResolvedBody, ResolvedTestParticle
 from tomcosmos.state.scenario import IntegratorConfig
+from tomcosmos.state.sim_units import days_past_j2000
 
 # Test-particle collision radius: 1 km converted to AU. Only meaningful for
 # collision detection; physically they're points.
@@ -43,12 +45,14 @@ def build_simulation(
     test_particles: list[ResolvedTestParticle],
     integrator_config: IntegratorConfig,
     *,
+    epoch: Time | None = None,
     assist_kernel_paths: tuple[str, str] | None = None,
 ) -> rebound.Simulation:
     """Create and configure a `rebound.Simulation` ready to integrate.
 
     Steps:
-      1. Set units to (AU, yr, Msun); never leave REBOUND's default G=1.
+      1. Set units to (AU, yr, Msun) for Mode B or (AU, day, Msun) for
+         Mode A. Never leave REBOUND's default G=1.
       2. Add massive bodies with stable hashes (`hash=<name>`). Indices are
          unstable across `sim.remove()` — every caller should look up by hash.
       3. Add massless test particles with the same hash discipline;
@@ -57,18 +61,31 @@ def build_simulation(
          (important once M5 scales to thousands).
       4. Configure the integrator (integrator name, dt, any per-integrator
          options like `ri_mercurius.r_crit_hill`).
-      5. Move to the center-of-mass frame. Without this, the COM drifts
-         linearly through ICRF and energy/angular-momentum diagnostics
-         pick up spurious linear terms.
+      5. In Mode A, anchor `sim.t` to TDB days past J2000 for the supplied
+         `epoch` so ASSIST's kernel lookups index the right ephemeris
+         instant. Caller passes `epoch=scenario.epoch`.
+      6. Move to the center-of-mass frame (Mode B only). Without this, the
+         COM drifts linearly through ICRF and energy/angular-momentum
+         diagnostics pick up spurious linear terms. Mode A skips this:
+         ASSIST's force model is defined in the SSB frame implied by
+         DE440 — shifting the test particles to their own COM would put
+         them in a non-inertial frame ASSIST's hardcoded perturber
+         positions don't share.
 
     When `integrator_config.ephemeris_perturbers=True`, the result is
     wrapped with an ASSIST `Extras` instance that supplies high-precision
     gravity from the Sun, planets, Moon, and 16 asteroid perturbers via
     DE440/sb441-n16 kernels. In this mode, the scenario must contain
-    only test particles (the schema enforces zero-bodies), `move_to_com`
-    is skipped (ASSIST works in the SSB frame defined by its kernels),
-    and the `effects` list is rejected as redundant (ASSIST already
-    includes GR + J2 internally).
+    only test particles (the schema enforces zero-bodies), and the
+    `effects` list is rejected as redundant (ASSIST already includes
+    GR + J2 internally).
+
+    `epoch` is **required** in Mode A — without it, ASSIST treats the
+    scenario as starting at J2000 regardless of when the user actually
+    wanted, which silently lies about the asteroid's environment by
+    decades. Mode B accepts `epoch=None` (the default); sim.t starts
+    at 0 and represents "elapsed time from start" rather than an
+    absolute ephemeris instant.
 
     `assist_kernel_paths` defaults to (config.assist_planet_kernel(),
     config.assist_asteroid_kernel()) when None and ASSIST is in use.
@@ -91,6 +108,11 @@ def build_simulation(
                 "ephemeris_perturbers=True ignores integrator.effects "
                 f"({integrator_config.effects!r}); ASSIST already includes "
                 "GR and J2 in its force model. Drop the effects list."
+            )
+        if epoch is None:
+            raise ValueError(
+                "ephemeris_perturbers=True requires `epoch` so sim.t can be "
+                "anchored to TDB days past J2000 for ASSIST's kernel lookups."
             )
     elif not bodies:
         raise ValueError("build_simulation requires at least one massive body")
@@ -147,6 +169,14 @@ def build_simulation(
     _configure_integrator(sim, integrator_config)
 
     if integrator_config.ephemeris_perturbers:
+        # Anchor sim.t before attaching Extras. ASSIST reads sim.t as TDB
+        # days past J2000 to index the DE440 / sb441-n16 kernels; leaving
+        # it at 0 would make the asteroid feel J2000's planet positions
+        # regardless of the scenario's actual epoch.
+        # `epoch` is non-None here per the validation block above; mypy can't
+        # see across the early-raise so we narrow it explicitly.
+        assert epoch is not None
+        sim.t = days_past_j2000(epoch)
         _attach_assist(sim, assist_kernel_paths)
         # Skip move_to_com: ASSIST's force model is defined in the SSB
         # frame implied by its DE440 kernel. Shifting the test particles
