@@ -74,10 +74,19 @@ class Viewer:
         scaling: Scaling = "log",
         follow: str | None = None,
         rotating: tuple[str, str] | None = None,
+        textures: bool = True,
         off_screen: bool = False,
     ) -> None:
         self._history = history
         self._scaling = scaling
+        # Texture support: when True, bodies in the textures registry
+        # (Earth ships offline; other planets fetch on first call) are
+        # rendered with their UV-mapped meshes. The texture only becomes
+        # visible at high zoom — at default solar-system framing,
+        # planets are sub-pixel and the texture is invisible regardless.
+        # Off-screen renders skip textures entirely: the snapshot tests
+        # don't need them, and the network fetches would slow CI.
+        self._use_textures = textures and not off_screen
         self._positions_au = _positions_by_body(history)
         self._body_names: tuple[str, ...] = tuple(self._positions_au.keys())
         # Rotating-frame mode: pre-rotate every sample of every body into
@@ -228,12 +237,35 @@ class Viewer:
             if name in self._bulk_cohort_set:
                 continue
             radius_au = _display_radius_au(name, self._scaling)
-            sphere = pv.Sphere(radius=radius_au, center=(0.0, 0.0, 0.0))
-            actor = self._plotter.add_mesh(
-                sphere, color=_color_for(name), smooth_shading=True,
-            )
+            mesh, texture = self._load_textured_or_sphere(name, radius_au)
+            if texture is not None:
+                actor = self._plotter.add_mesh(
+                    mesh, texture=texture, smooth_shading=True,
+                )
+            else:
+                actor = self._plotter.add_mesh(
+                    mesh, color=_color_for(name), smooth_shading=True,
+                )
             actor.position = (float(pts[0, 0]), float(pts[0, 1]), float(pts[0, 2]))
             self._body_actors[name] = actor
+
+    def _load_textured_or_sphere(
+        self, name: str, radius_au: float,
+    ) -> tuple[pv.PolyData, object | None]:
+        """Return `(mesh, texture)` for body `name`. Texture is None when
+        textures are disabled, when the body has no entry in the registry,
+        or when the registry's loader fails (e.g. a download error for a
+        non-Earth planet on a fresh machine without network). The
+        fallback path always succeeds — it's just `pv.Sphere`."""
+        if self._use_textures:
+            from tomcosmos.viz.textures import load_for_body
+            try:
+                pair = load_for_body(name, radius_au)
+            except Exception:  # noqa: BLE001 — pyvista downloads can raise widely
+                pair = None
+            if pair is not None:
+                return pair
+        return pv.Sphere(radius=radius_au, center=(0.0, 0.0, 0.0)), None
 
     def _add_bulk_points(self) -> None:
         """Single PolyData containing one vertex per bulk-cohort particle,

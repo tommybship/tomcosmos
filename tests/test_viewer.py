@@ -258,6 +258,42 @@ def test_viewer_below_threshold_uses_per_body_actors() -> None:
     assert {"sun", "earth"} <= set(viewer._body_actors)  # noqa: SLF001
 
 
+def test_viewer_textures_disabled_off_screen() -> None:
+    """Off-screen renders skip textures regardless of the `textures`
+    flag — snapshot tests don't need them, and pyvista's network
+    texture fetches would slow CI. Verifies that constructing
+    off-screen with `textures=True` (the default) doesn't trigger
+    the texture pipeline."""
+    from tomcosmos.viz.pyvista_viewer import Viewer
+
+    viewer = Viewer(_fresh_history(), textures=True, off_screen=True)
+    assert viewer._use_textures is False  # noqa: SLF001
+
+
+def test_viewer_textures_load_for_earth_offline() -> None:
+    """The textures registry is fully offline for Earth — the bundled
+    pyvista globe asset. Other planets fetch on demand. Verify Earth
+    works without network so the headline texture path stays
+    CI-portable."""
+    from tomcosmos.viz.textures import load_for_body
+
+    pair = load_for_body("earth", radius_au=0.005)
+    assert pair is not None
+    mesh, texture = pair
+    assert mesh is not None
+    assert texture is not None
+
+
+def test_viewer_textures_unknown_body_returns_none() -> None:
+    """Bodies without a registry entry (test particles, custom names,
+    asteroids) fall back to the plain-sphere path. The viewer treats
+    `None` as "not textured" and uses the solid-color sphere instead."""
+    from tomcosmos.viz.textures import load_for_body
+
+    assert load_for_body("apophis", radius_au=0.001) is None
+    assert load_for_body("nonexistent-body", radius_au=0.001) is None
+
+
 def test_follow_camera_does_not_apply_in_default_mode() -> None:
     """Without follow, the focal point stays at the SSB origin throughout."""
     from tomcosmos.viz.pyvista_viewer import Viewer

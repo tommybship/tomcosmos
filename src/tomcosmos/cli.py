@@ -217,6 +217,13 @@ def view_cmd(
              "stays fixed in the viewport; tadpole / horseshoe orbits become "
              "visible. Cannot be combined with --follow.",
     ),
+    no_textures: bool = typer.Option(
+        False, "--no-textures",
+        help="Render bodies as solid-color spheres instead of textured "
+             "meshes. Default is on; turn off to skip the one-time texture "
+             "downloads from pyvista's example server (Earth's texture "
+             "ships locally; planets and the Sun fetch on first call).",
+    ),
 ) -> None:
     """Open a 3D viewer on a run's Parquet file."""
     from tomcosmos.viz.pyvista_viewer import Viewer
@@ -239,6 +246,7 @@ def view_cmd(
     try:
         viewer = Viewer(  # type: ignore[arg-type]
             history, scaling=scaling, follow=follow, rotating=rotating_pair,
+            textures=not no_textures,
         )
     except ValueError as e:
         _error(str(e), exit_code=2)
