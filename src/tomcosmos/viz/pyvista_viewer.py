@@ -199,7 +199,7 @@ class Viewer:
     # --- Scene construction ---------------------------------------------
 
     def _build_scene(self) -> None:
-        self._plotter.set_background("black")  # type: ignore[arg-type]
+        self._plotter.set_background("black")
         self._add_trails()
         self._add_bodies()
         self._add_bulk_points()
@@ -334,7 +334,7 @@ class Viewer:
                 (float(follow_t0[0]), float(follow_t0[1]), float(follow_t0[2])),
                 (0.0, 1.0, 0.0),
             ]
-            self._plotter.enable_parallel_projection()  # type: ignore[call-arg]
+            self._plotter.enable_parallel_projection()
             self._plotter.camera.parallel_scale = spread * 1.5
             return
 
@@ -350,7 +350,7 @@ class Viewer:
             (0.0, 0.0, 0.0),           # focal point
             (0.0, 1.0, 0.0),           # view up
         ]
-        self._plotter.enable_parallel_projection()  # type: ignore[call-arg]
+        self._plotter.enable_parallel_projection()
         self._plotter.camera.parallel_scale = max_r * 1.1
 
     def _add_time_slider(self) -> None:
