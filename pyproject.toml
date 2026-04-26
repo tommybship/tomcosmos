@@ -82,6 +82,7 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 # any orbital-mechanics reference, so we exempt the physics modules
 # from N803/N806.
 "src/tomcosmos/state/ic.py"             = ["N803", "N806"]
+"src/tomcosmos/state/kepler.py"         = ["N803", "N806"]
 "src/tomcosmos/analysis/encounters.py"  = ["N803", "N806"]
 "src/tomcosmos/analysis/rotating_frame.py" = ["N803", "N806"]
 "src/tomcosmos/targeting/lambert.py"    = ["N802", "N803", "N806"]

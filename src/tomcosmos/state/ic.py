@@ -367,82 +367,33 @@ def _resolve_keplerian(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Six classical elements → ICRF barycentric (r_km, v_kms).
 
-    Pipeline:
-      1. Solve Kepler's equation E − e·sin E = M for eccentric anomaly E.
-      2. Build position+velocity in the perifocal (PQW) frame.
-      3. Rotate by R3(-Ω)·R1(-i)·R3(-ω) into the parent body's
-         orbital frame (ecliptic or ICRF, per `ic.frame`).
-      4. Add the parent body's ICRF state to lift to barycentric.
+    Hands the math to `state.kepler.keplerian_to_state` (shared with
+    targeting.sbdb), then handles the scenario-specific bits: looking
+    up the parent body's mass + state, applying the ecliptic→ICRF
+    rotation if needed, and lifting to barycentric.
     """
+    from tomcosmos.state.kepler import keplerian_to_state
+
     parent_body = _scenario_body_by_name(scenario, ic.parent, "parent")
     r_parent, v_parent = _state_for(parent_body, epoch, source)
     mu_parent = _G_KM3_PER_KG_S2 * _mass_kg_for(parent_body)
 
-    # Kepler-propagate the mean anomaly if elements were measured at a
-    # different epoch (M5 reuse — for now `epoch_offset_s == 0` is the
-    # common path).
-    n = float(np.sqrt(mu_parent / ic.a_km ** 3))  # rad/s
-    M = np.deg2rad(ic.mean_anom_deg) + n * ic.epoch_offset_s
-    E = _solve_kepler(M, ic.e)
-
-    cos_E, sin_E = np.cos(E), np.sin(E)
-    one_minus_e_cos_E = 1.0 - ic.e * cos_E
-
-    # Perifocal coordinates: x along periapsis, y 90° ahead in the orbit.
-    r_pqw = np.array([
-        ic.a_km * (cos_E - ic.e),
-        ic.a_km * np.sqrt(1.0 - ic.e ** 2) * sin_E,
-        0.0,
-    ])
-    rdot_factor = float(np.sqrt(mu_parent * ic.a_km)) / (ic.a_km * one_minus_e_cos_E)
-    v_pqw = rdot_factor * np.array([
-        -sin_E,
-        np.sqrt(1.0 - ic.e ** 2) * cos_E,
-        0.0,
-    ])
-
-    # Perifocal → orbital plane (ecliptic or ICRF, per ic.frame).
-    R = _euler_3_1_3(
-        np.deg2rad(ic.raan_deg),
-        np.deg2rad(ic.inc_deg),
-        np.deg2rad(ic.argp_deg),
+    r_in_frame, v_in_frame = keplerian_to_state(
+        a=ic.a_km,
+        e=ic.e,
+        inc_rad=np.deg2rad(ic.inc_deg),
+        raan_rad=np.deg2rad(ic.raan_deg),
+        argp_rad=np.deg2rad(ic.argp_deg),
+        mean_anom_rad=np.deg2rad(ic.mean_anom_deg),
+        mu=mu_parent,
+        dt=ic.epoch_offset_s,
     )
-    r_in_frame = R @ r_pqw
-    v_in_frame = R @ v_pqw
 
     # Lift to ICRF barycentric (frame and parent both contribute).
     if ic.frame == "ecliptic_j2000_barycentric":
         r_in_frame = ecliptic_to_icrf(r_in_frame)
         v_in_frame = ecliptic_to_icrf(v_in_frame)
     return r_parent + r_in_frame, v_parent + v_in_frame
-
-
-def _solve_kepler(M: float, e: float, tol: float = 1e-12) -> float:
-    """Newton-Raphson on E − e·sin E = M, with M wrapped to [-π, π]."""
-    M = (M + np.pi) % (2.0 * np.pi) - np.pi
-    # Danby's seed: works well for any eccentricity in [0, 1).
-    E = M + 0.85 * e * (1.0 if M >= 0.0 else -1.0)
-    for _ in range(50):
-        f = E - e * np.sin(E) - M
-        fp = 1.0 - e * np.cos(E)
-        delta = f / fp
-        E -= delta
-        if abs(delta) < tol:
-            return E
-    raise RuntimeError(f"Kepler solver did not converge: M={M}, e={e}")
-
-
-def _euler_3_1_3(raan: float, inc: float, argp: float) -> np.ndarray:
-    """3-1-3 Euler rotation R3(-Ω) · R1(-i) · R3(-ω). Standard astrodynamics
-    perifocal → reference-frame transform."""
-    cO, sO = np.cos(raan), np.sin(raan)
-    ci, si = np.cos(inc), np.sin(inc)
-    cw, sw = np.cos(argp), np.sin(argp)
-    return np.array([
-        [cO * cw - sO * sw * ci,  -cO * sw - sO * cw * ci,   sO * si],
-        [sO * cw + cO * sw * ci,  -sO * sw + cO * cw * ci,  -cO * si],
-        [sw * si,                  cw * si,                  ci    ],
-    ])
 
 
 # ---------------------------------------------------------------------------
