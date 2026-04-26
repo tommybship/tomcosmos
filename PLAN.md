@@ -30,7 +30,7 @@ The integrator runs in one of two modes, selected per scenario by `integrator.ep
 
 ### Mode A — `ephemeris_perturbers: true` (REBOUND + ASSIST)
 
-Used for: accurate small-body / asteroid / NEO / mission propagation against the real solar system. Default for M5 work.
+Used for: accurate small-body / asteroid / NEO / mission propagation against the real solar system.
 
 - Force model is **ASSIST**'s force loop. Gravity for the Sun, eight planets, Moon, Pluto, and 16 large asteroid perturbers comes from JPL DE440 + sb441-n16 kernels, read directly. GR (1PN) and J2 oblateness are baked in.
 - Only test particles are integrated. Massive `Body` declarations are rejected by the schema — they would double-count the ephemeris.
@@ -61,7 +61,7 @@ There are no parallel rails between the four. Each library plays a single role; 
 ## Non-goals
 
 Pinning these explicitly so scope doesn't creep across milestones:
-- **Non-gravitational forces.** None today. Solar radiation pressure and Yarkovsky are reachable through REBOUNDx in Mode B once we want them — flagged in "Landed, opt-in, or deferred" below. Outgassing and atmospheric drag are out of scope. Small-body trajectories (M5) are pure-gravity approximations until REBOUNDx forces are wired in.
+- **Non-gravitational forces.** None today. Solar radiation pressure and Yarkovsky are reachable through REBOUNDx in Mode B once we want them — flagged in "Landed, opt-in, or deferred" below. Outgassing and atmospheric drag are out of scope. Mode A bakes GR (1PN) and J2 oblateness into ASSIST's force loop but no non-grav effects; small-body trajectories that need Yarkovsky-class corrections (decade-scale NEO orbit-determination) aren't tomcosmos's current target.
 - **Planetary rotation / orientation dynamics.** Spin axes are available as data for visualization, but no torque integration. No tidal dissipation.
 - **Mission-design optimization stacks.** tomcosmos provides primitives (Lambert solver in `tomcosmos.targeting`, two-body propagation, frame conversions, Δv events) and lets users compose them. Full optimization frameworks — multi-burn targeting, B-plane corrections, sequential convex programming, low-thrust trajectory optimization — remain out of scope. Lambert lets you target a planet at a future epoch; iterating on the result for, say, fuel-optimal Mars-to-Vesta-to-Ceres tour is a different product.
 - **Byte-identical cross-platform reproducibility.** Floating-point associativity under different BLAS/CPU combinations makes this intractable. Same-machine reruns agreeing to ~1e-10 is the bar.
@@ -76,7 +76,7 @@ Not permanent omissions — each of the below is a specific tightening step on t
 - **JPL GM values instead of `m × G`** — Mode B only (Mode A reads JPL constants directly via ASSIST). Masses in `constants.py` would be re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Less critical now that Mode A exists for accuracy-sensitive work, but still on the table for tighter Mode B comparisons.
 - **Yarkovsky / radiation pressure** — Mode B, via REBOUNDx forces (`yarkovsky_effect`, `radiation_forces`). Not wired up yet; relevant once Mode B asteroid scenarios appear. Mode A doesn't need it for typical NEO work — JPL Horizons folds these into ephemeris updates rather than recomputing them per propagation.
 
-The M1 envelope (Earth 1-yr ≤ 2e6 km, see below) reflects *current default* scope (no moons, no GM-direct, GR off). Turning GR on doesn't meaningfully improve the Earth 1-yr baseline — Earth's GR precession is ~3.8 arcsec/century (Mercury is ~43), dominated by the moon and asteroid omissions. M3 target once moons + GM-direct land: Earth 1-yr on the order of ~1e4 km or better, with the same opt-in GR toggle still available for pedagogy.
+The Mode B Earth-1-yr envelope (≤ 2e6 km, see below) reflects *current default* Mode B scope (no moons, no GM-direct, GR off). Turning GR on doesn't meaningfully improve the Earth-1-yr baseline — Earth's GR precession is ~3.8 arcsec/century (Mercury is ~43), dominated by the moon and asteroid omissions. Adding moons and JPL-direct GM values would tighten Earth-1-yr to ~1e4 km or better while keeping `effects: [gr]` available for pedagogy. Mode A skips this entire ladder by reading DE440 + sb441-n16 directly — Apophis-30-day comes back at ~72 m vs Horizons.
 
 ## Project location and layout
 - **On disk**: `C:\git\tommybship\tomcosmos` — all paths in this plan are relative to this directory.
@@ -641,8 +641,8 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     - `build_simulation` now requires `epoch=scenario.epoch` in Mode A and anchors `sim.t` to TDB days past J2000 so ASSIST's kernel lookups index the right ephemeris instant.
     - `state.kepler` — shared two-body math (Kepler equation solver, perifocal rotation, `keplerian_to_state`) factored out so `state.ic._resolve_keplerian` and `targeting.sbdb.state_at_epoch` go through one implementation instead of two parallel copies.
 
-- **M6 — Share + package.**
-  - **Exit criteria:** (1) README has a quickstart that works on a fresh machine (verified by following it yourself on a fresh conda env); (2) at least one textured body (Earth ships offline; other planets fetch on demand) to prove the asset pipeline works.
+- **M6 — Share + package (landed).**
+  - **Exit criteria:** (1) README has a quickstart that works on a fresh machine (Mode B sun-planets + Mode A apophis-30day + bulk neos-100, all runnable from a clean conda env); (2) at least one textured body (Earth ships offline via `pv.examples.load_globe_texture`; other planets fetch on demand from pyvista's example server, cached locally).
   - **Trame-based web viewer** — originally listed as an exit criterion ("`tomcosmos serve` launches a localhost web viewer with the same features as the desktop pyvista viewer"). Removed: the "share without installing" benefit only materializes with deployment infrastructure (hosting / CORS / persistence) that's out of tomcosmos's scope, and the Jupyter-embedding sweet spot is already served by pyvista's built-in `set_jupyter_backend('trame')`. Revisit if a deployed-demo motivation emerges.
   - **PyInstaller bundle** — originally listed as optional. Skipped for the same reason: real packaging value requires a target audience that today's tomcosmos doesn't have.
 
@@ -902,9 +902,21 @@ Two processors: JSON to file, colorized console renderer to stderr when `--verbo
 
 ## Accuracy envelope
 
-Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers. Two columns per body: **M1 current** (observed with Sun + 8 planets, no moons, default GR off) and **M3 target** (once major moons + JPL `GM` values have landed; GR is already available). Target numbers are engineering estimates; we'll calibrate them against actual M3 measurements the same way we did for M1.
+Pinned in one place so tests, exit criteria, and user expectations all point at the same numbers.
 
-| Timespan | Earth (M1 current / M3 target) | Mercury (M1 / M3) | Energy error (WHFast) | Energy error (IAS15) |
+### Mode A vs Horizons (the headline)
+
+Same physics on both sides (DE440 + sb441-n16 perturbers + GR + J2). Residual is integrator step + roundoff.
+
+| Object | Span | Position vs Horizons | Velocity vs Horizons |
+|---|---|---|---|
+| Apophis | 30 days | < 100 m | < 1 µm/s |
+
+### Mode B against ephemeris truth
+
+Two columns per body: **current** (default `sun-planets.yaml`: 8 planets, no moons, GR off) and **post-cleanup target** (once major moons + JPL-direct `GM` values land; GR is already available via `effects: [gr]`). Target numbers are engineering estimates that would calibrate against actual measurements once the cleanup work happens. Mode A skips this ladder entirely.
+
+| Timespan | Earth (current / target) | Mercury (current / target) | Energy error (WHFast) | Energy error (IAS15) |
 |---|---|---|---|---|
 | 1 year | < 2e6 km / < 1e4 km | < 7e5 km / < 1e4 km | bounded ≤ 1e-10 | ≤ 1e-13 |
 | 10 years | < 2e7 km / < 1e5 km | < 5e6 km / < 1e5 km | bounded ≤ 1e-9 | ≤ 1e-12 |
@@ -920,7 +932,7 @@ Test tolerances (Tier 3) use this table directly. If a target tightens below wha
 
 ## Critical files (rough layout when building)
 - `scenarios/*.yaml` — scenario configs
-- `src/tomcosmos/cli.py` — typer CLI (`run`, `view`, `serve`, `validate`, `info`, `fetch-kernels`, `rerun`)
+- `src/tomcosmos/cli.py` — typer CLI (`run`, `view`, `validate`, `info`, `fetch-kernels`)
 - `src/tomcosmos/state/scenario.py` — Pydantic scenario schema
 - `src/tomcosmos/state/ephemeris.py` — SPICE/skyfield loading, state queries
 - `src/tomcosmos/state/ic.py` — special IC computation (Lagrange, Keplerian, explicit)
