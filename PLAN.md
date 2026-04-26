@@ -117,9 +117,9 @@ C:\git\tommybship\tomcosmos\
 │       │   └── metrics.py           # energy/angular-momentum traces, period extraction
 │       └── viz/            # rendering
 │           ├── __init__.py
-│           ├── scene.py       # shared scene construction (used by both backends)
+│           ├── scene.py       # shared scene construction
 │           ├── pyvista_viewer.py
-│           └── web.py         # M6 trame app
+│           └── textures.py    # body texture registry (M6)
 ├── scripts/                # fetch_kernels.py, hello_world.py
 ├── scenarios/              # *.yaml scenario configs
 ├── tests/                  # mirrors src/tomcosmos/ layout
@@ -215,7 +215,6 @@ Versions pinned to major-version ranges. Conda-forge is the source for everythin
 | `pyarrow` | `>=15,<20` | Parquet read/write | M0 |
 | `pandas` | `>=2.2,<3` | `StateHistory` DataFrame surface, quick-look plots | M0 |
 | `pyvista` | `>=0.43,<1` | 3D visualization (VTK under the hood) | M1 |
-| `trame` | `>=3.5,<4` | Web viewer (pyvista scenes served to browser) | M6 |
 
 ### Dev-only dependencies
 
@@ -255,7 +254,6 @@ dependencies:
   - pyarrow>=15,<20
   - pandas>=2.2,<3
   - pyvista>=0.43,<1
-  - trame>=3.5,<4
   # dev
   - pytest>=8,<9
   - pytest-xdist>=3.5,<4
@@ -298,7 +296,6 @@ dependencies = [
   "pyarrow>=15,<20",
   "pandas>=2.2,<3",
   "pyvista>=0.43,<1",
-  "trame>=3.5,<4",
 ]
 
 [project.optional-dependencies]
@@ -337,7 +334,7 @@ warn_return_any = false
 
 # untyped C-extension scientific deps — stubs don't exist, ignore missing imports:
 [[tool.mypy.overrides]]
-module = ["rebound.*", "reboundx.*", "skyfield.*", "assist.*", "pyvista.*", "vtk.*", "trame.*", "astroquery.*"]
+module = ["rebound.*", "reboundx.*", "skyfield.*", "assist.*", "pyvista.*", "vtk.*", "astroquery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -538,8 +535,8 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
   - `checkpoint` → `{"checkpoint_path": <str>, "sample_idx": <int>}`
 - JSON (vs one column per field) because the kinds are heterogeneous and rare; Parquet's string compression makes the overhead negligible. Typed columns return when a given kind becomes hot enough to justify a dedicated schema.
 
-### 3. Visualization layer — pyvista now, trame for web later
-- **`pyvista`** desktop 3D viewer reads state history, renders bodies with orbit trails, supports time scrubbing and camera targeting. **`pyvista` + `trame`** exposes the same scene as a web app — "share it" and "package it" without porting to three.js.
+### 3. Visualization layer — pyvista desktop viewer
+- **`pyvista`** desktop 3D viewer reads state history, renders bodies with orbit trails, supports time scrubbing and camera targeting. Bulk-cohort path (single PolyData with one vertex per particle) scales to thousands of test particles for asteroid-population scenarios. Textured bodies (Earth offline, other planets fetched on demand) for inspection at zoom.
 
 #### Body scaling (true scale is unwatchable — plan for it)
 - **Three display modes**, toggleable in the viewer:
@@ -645,7 +642,9 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     - `state.kepler` — shared two-body math (Kepler equation solver, perifocal rotation, `keplerian_to_state`) factored out so `state.ic._resolve_keplerian` and `targeting.sbdb.state_at_epoch` go through one implementation instead of two parallel copies.
 
 - **M6 — Share + package.**
-  - **Exit criteria:** (1) `tomcosmos serve runs/<name>.parquet` launches a trame-based web viewer on localhost with the same features as the desktop pyvista viewer; (2) README has a quickstart that works on a fresh machine (verified by following it yourself on a fresh conda env); (3) at least one textured body (Earth or Sun) to prove the asset pipeline works; (4) optional: PyInstaller bundle.
+  - **Exit criteria:** (1) README has a quickstart that works on a fresh machine (verified by following it yourself on a fresh conda env); (2) at least one textured body (Earth ships offline; other planets fetch on demand) to prove the asset pipeline works.
+  - **Trame-based web viewer** — originally listed as an exit criterion ("`tomcosmos serve` launches a localhost web viewer with the same features as the desktop pyvista viewer"). Removed: the "share without installing" benefit only materializes with deployment infrastructure (hosting / CORS / persistence) that's out of tomcosmos's scope, and the Jupyter-embedding sweet spot is already served by pyvista's built-in `set_jupyter_backend('trame')`. Revisit if a deployed-demo motivation emerges.
+  - **PyInstaller bundle** — originally listed as optional. Skipped for the same reason: real packaging value requires a target audience that today's tomcosmos doesn't have.
 
 ## Developer workflow + CLI
 
@@ -657,7 +656,6 @@ Installed as a console script via `pyproject.toml` `[project.scripts]`. Built wi
 ```
 tomcosmos run     scenarios/sun-planets.yaml        # integrate; writes runs/<name>.parquet
 tomcosmos view    runs/sun-planets-baseline.parquet # open pyvista viewer
-tomcosmos serve   runs/sun-planets-baseline.parquet # trame web viewer on localhost (M6)
 tomcosmos validate scenarios/sun-planets.yaml       # full preflight: schema + ephemeris coverage + kernels + body/event lookups
 tomcosmos info    runs/sun-planets-baseline.parquet # print metadata (epoch, duration, energy error)
 tomcosmos fetch-kernels                             # download SPICE kernels to data/kernels/
@@ -932,7 +930,7 @@ Test tolerances (Tier 3) use this table directly. If a target tightens below wha
 - `src/tomcosmos/io/history.py` — Parquet state history I/O with embedded metadata (HDF5 fallback if streaming writes needed later)
 - `src/tomcosmos/io/diagnostics.py` — structlog setup, run-metadata capture (git SHA, kernel hashes)
 - `src/tomcosmos/viz/pyvista_viewer.py` — 3D viewer
-- `src/tomcosmos/viz/web.py` — trame web app (M6)
+- `src/tomcosmos/viz/textures.py` — body texture registry (Earth offline + planet textures on demand)
 - `scripts/fetch_kernels.py` — kernel downloader (also exposed via CLI)
 - `scripts/hello_world.py` — M0 toolchain-sanity script
 - `.github/workflows/ci.yml` — pytest + ruff + mypy on push/PR
