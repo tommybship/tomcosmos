@@ -610,7 +610,7 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     - Mode A picks up ~127 km of planetary perturbation work over those 30 days vs. a pure-Kepler baseline — confirms ASSIST's force loop is wired correctly.
     - Critical gotcha (for users): pure-Kepler propagation from element epoch to a scenario epoch months later accumulates **thousands** of km of error (the perturbation history Horizons captures and pure two-body doesn't). For arbitrary scenario epochs, query Horizons directly for the IC state vector instead of Kepler-propagating SBDB elements. Tracked as a follow-up; not blocking.
 
-  - **M5b — bulk asteroid ingestion + viewer scale (in progress).**
+  - **M5b — bulk asteroid ingestion + viewer scale (landed).**
 
     Two ingestion paths, deliberately parallel — the user picks the one that fits the question they're answering. **No default**, no auto-fallback wrapper: the import line itself should disclose the strategy, since the right pick depends on intent and a hidden default would lie.
 
@@ -635,9 +635,9 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
     Also landed (slice 4):
     - **Mode A encounter detection.** `analysis.encounters.detect_hill_encounters` now splits on `scenario.integrator.ephemeris_perturbers`. Mode B uses the existing `scenario.bodies` pivot. Mode A pulls major-body trajectories (Mercury, Venus, Earth, Moon, Mars, Jupiter, Saturn, Uranus, Neptune) back from the supplied `EphemerisSource` via a new vectorized `query_many(body, epochs)` — one skyfield call per body for all sample times instead of N samples × N bodies single-epoch queries (185× speedup for 365-epoch test). The runner threads `source` through to the detector. NEO test particles flying past Earth still produce encounter events even though Earth was never an explicit `Body` in the scenario. Pluto + the 16 SBDB perturbers ASSIST integrates against are deliberately excluded — Pluto's barycenter motion confuses the simple sample-0 distance proxy for `a`, and asteroid Hill spheres are physically silly.
 
-    Still ahead for M5b:
-    - **1,000-body demo scenario.** `scenarios/neos-bulk.yaml` ingesting a real NEO catalog filter (e.g. all numbered NEOs above some H-magnitude threshold) and a CLI pass that demonstrates the end-to-end `tomcosmos run` → `tomcosmos view` story at the target scale.
-    - **Mode A `energy_rel_err` cleanup.** `sim.energy()` doesn't capture ASSIST's external forces, so the column is always 0.0 in Mode A. Either compute a Mode-A-aware diagnostic (heliocentric-distance-vs-Kepler-baseline?) or document the column as N/A in Mode A.
+    Also landed (slices 5–6):
+    - **Mode A `energy_rel_err` = NaN.** `sim.energy()` doesn't capture ASSIST's external forces, so the column was always 0.0 — silently lying about integration health. Mode A now emits NaN and skips the energy calc entirely; consumers reading the column see "missing diagnostic," not "perfect integrator." Mode B unchanged.
+    - **`scenarios/neos-100.yaml` demo scenario** + **`scripts/build_neos_scenario.py`** regen helper. Pulls the first N numbered NEOs from JPL's SBDB Query API, queries Horizons for each at scenario epoch, writes a runnable Mode A YAML. Initial commit ships a 100-NEO snapshot at 2026-04-26 TDB; users can `python scripts/build_neos_scenario.py --count 1000` to regenerate at any scale. End-to-end `tomcosmos run scenarios/neos-100.yaml` works directly — 100 asteroids × 365 days × 5-day cadence completes in well under a second post-warmup.
 
   - **Cross-cutting fixes that landed alongside M5a:**
     - `state.sim_units` — sim-aware unit conversions so `runner.py` is mode-agnostic. Without this, Mode A propagation through `tomcosmos.run` was silently wrong by 365× (years vs. days mismatch in the integrate / output paths).
