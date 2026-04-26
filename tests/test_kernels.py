@@ -8,6 +8,7 @@ import pytest
 from tomcosmos.kernel_fetch import _read_manifest, _sha256, _write_manifest
 from tomcosmos.kernels import (
     ALL_GROUPS,
+    ASSIST_GROUPS,
     BASE_GROUP,
     SATELLITE_GROUPS,
     group_by_name,
@@ -63,6 +64,23 @@ def test_satellite_groups_all_have_satellites() -> None:
         assert len(g.bodies) > 0
         for body in g.bodies:
             assert group_for_body(body) is g
+
+
+def test_assist_groups_resolve_to_default_paths() -> None:
+    """`tomcosmos fetch-kernels --include assist` writes kernels into the
+    repo's kernel directory under the same filenames `config.assist_*` looks
+    for. Drift between the registry filename and the config default would
+    silently break Mode A — assert they match."""
+    from tomcosmos.config import assist_asteroid_kernel, assist_planet_kernel
+
+    by_name = {g.name: g for g in ASSIST_GROUPS}
+    assert by_name["assist-planets"].filename == assist_planet_kernel().name
+    assert by_name["assist-asteroids"].filename == assist_asteroid_kernel().name
+
+
+def test_assist_groups_in_all_groups() -> None:
+    for g in ASSIST_GROUPS:
+        assert g in ALL_GROUPS
 
 
 # --- manifest I/O -----------------------------------------------------------

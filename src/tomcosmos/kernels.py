@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 NAIF_BASE = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk"
+JPL_SSD_ASTEROIDS_BASE = "https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441"
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,33 @@ SATELLITE_GROUPS: tuple[KernelGroup, ...] = (
     ),
 )
 
-ALL_GROUPS: tuple[KernelGroup, ...] = (BASE_GROUP, *SATELLITE_GROUPS)
+# ASSIST (Mode A) kernels — full DE440 + 16 large-asteroid perturbers. ASSIST
+# accepts the small DE440s for short-span tests, but its upstream test suite
+# and our `assist` marker tests both assume the full file, so this is what
+# `--include assist` fetches. Set `TOMCOSMOS_ASSIST_PLANET_KERNEL` /
+# `TOMCOSMOS_ASSIST_ASTEROID_KERNEL` to point at alternates if you keep them
+# elsewhere on disk. NAIF also ships `de441.bsp` covering -13200..+17191 CE
+# at ~3.3 GB if you need deep-time propagation; the default below is the
+# standard `de440.bsp` covering 1849..2150 CE at ~120 MB, which is plenty
+# for mission / NEO / asteroid work.
+ASSIST_GROUPS: tuple[KernelGroup, ...] = (
+    KernelGroup(
+        name="assist-planets",
+        filename="de440.bsp",
+        url=f"{NAIF_BASE}/planets/de440.bsp",
+        approx_size_mb=120.0,
+        bodies=(),  # Mode A reads this directly in the force loop, not by name
+    ),
+    KernelGroup(
+        name="assist-asteroids",
+        filename="sb441-n16.bsp",
+        url=f"{JPL_SSD_ASTEROIDS_BASE}/sb441-n16.bsp",
+        approx_size_mb=645.0,  # 16 asteroids over DE441's full ~30 ka span
+        bodies=(),
+    ),
+)
+
+ALL_GROUPS: tuple[KernelGroup, ...] = (BASE_GROUP, *SATELLITE_GROUPS, *ASSIST_GROUPS)
 
 
 def group_for_body(canonical_name: str) -> KernelGroup | None:

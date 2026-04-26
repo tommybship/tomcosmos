@@ -249,8 +249,10 @@ def view_cmd(
 def fetch_kernels_cmd(
     include: list[str] = typer.Option(
         [], "--include", "-i",
-        help="Add a kernel group: mars | jupiter | saturn | neptune | pluto. "
-             "Default (no flags) fetches just DE440s (~32 MB). Repeatable.",
+        help="Add a kernel group. Satellite kernels: mars | jupiter | saturn "
+             "| neptune | pluto. ASSIST (Mode A) kernels: assist-planets | "
+             "assist-asteroids, or `assist` as a shortcut for both. Default "
+             "(no flags) fetches just DE440s (~32 MB). Repeatable.",
     ),
     fetch_all: bool = typer.Option(
         False, "--all",
@@ -282,6 +284,7 @@ def fetch_kernels_cmd(
     from tomcosmos.kernel_fetch import fetch_groups
     from tomcosmos.kernels import (
         ALL_GROUPS,
+        ASSIST_GROUPS,
         BASE_GROUP,
         SATELLITE_GROUPS,
         group_by_name,
@@ -300,13 +303,18 @@ def fetch_kernels_cmd(
             if name in ("all-moons", "all"):
                 groups = list(ALL_GROUPS)
                 break
+            # Convenience: --include assist pulls both ASSIST kernels at once.
+            if name == "assist":
+                groups.extend(ASSIST_GROUPS)
+                continue
             try:
                 groups.append(group_by_name(name))
             except KeyError:
+                known = sorted(
+                    {g.name for g in (*SATELLITE_GROUPS, *ASSIST_GROUPS)}
+                ) + ["assist", "all"]
                 _error(
-                    f"unknown kernel group {name!r}. "
-                    f"Known: {', '.join(g.name for g in SATELLITE_GROUPS)} "
-                    "(or use --all for every group)",
+                    f"unknown kernel group {name!r}. Known: {', '.join(known)}",
                     exit_code=2,
                 )
 
