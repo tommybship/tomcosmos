@@ -208,6 +208,41 @@ class EphemerisSource:
         v = np.asarray(target_pos.velocity.km_per_s, dtype=np.float64)
         return r, v
 
+    def query_many(
+        self, body: str | int, epochs: Time,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorized query: return ICRF barycentric (r_km, v_kms) at every
+        instant in `epochs`. Shapes: ``(N, 3)``.
+
+        Used by post-hoc analysis (encounter detection) and any other
+        code path that needs a full body trajectory at the same N
+        sample times. One skyfield evaluation handles the whole batch
+        — internally a vectorized SPK lookup that's hundreds of times
+        faster than a Python loop of single `.query` calls.
+        """
+        target_key, parent_canonical = self._resolver_for(body)
+        target_kernel = self._kernel_with(target_key)
+        if target_kernel is None:
+            self._raise_missing_kernel(body, target_key, parent_canonical)
+        if parent_canonical is not None:
+            parent_target, _ = _SKYFIELD_RESOLVERS[parent_canonical]
+            if self._kernel_with(parent_target) is None:
+                raise UnknownBodyError(
+                    f"body {body!r} resolves through parent {parent_canonical!r} "
+                    f"which isn't loaded in any kernel"
+                )
+
+        jd = np.asarray(epochs.tdb.jd, dtype=np.float64)
+        if jd.ndim == 0:  # promote scalar to length-1 batch
+            jd = jd[np.newaxis]
+        t = self._ts.tdb_jd(jd)
+        target_pos = target_kernel[target_key].at(t)
+        # skyfield returns shape (3, N); transpose to (N, 3) for caller-side
+        # row-major iteration.
+        r = np.asarray(target_pos.position.km, dtype=np.float64).T
+        v = np.asarray(target_pos.velocity.km_per_s, dtype=np.float64).T
+        return r, v
+
     def available_bodies(self) -> tuple[str, ...]:
         """Canonical lowercase names of bodies this source can resolve."""
         out: list[str] = []

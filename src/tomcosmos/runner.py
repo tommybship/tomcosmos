@@ -203,7 +203,7 @@ def run(
     # keep the integration loop unaware of analysis. Sub-cadence flybys are
     # missed by construction — output cadence sets the resolution.
     from tomcosmos.analysis.encounters import detect_hill_encounters
-    encounter_events = detect_hill_encounters(history)
+    encounter_events = detect_hill_encounters(history, source=source)
     events = _merge_event_logs(encounter_events, dv_events)
     history = StateHistory(
         df=df, scenario=scenario, body_names=all_names,
