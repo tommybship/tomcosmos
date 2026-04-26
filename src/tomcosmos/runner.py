@@ -98,7 +98,17 @@ def run(
 
     sample_offsets_s = _sample_grid_seconds(scenario)
     burn_timeline = _build_burn_timeline(scenario, time_unit_s, vel_to_kms)
-    e0 = sim.energy()
+
+    # Energy diagnostic. In Mode B (vanilla REBOUND), `sim.energy()` is
+    # the conserved Hamiltonian and `|ΔE/E|` is a meaningful drift
+    # metric. In Mode A (ASSIST-driven), gravity comes from external
+    # kernels via a force callback that REBOUND's energy summation
+    # doesn't see, so `sim.energy()` is just kinetic + in-sim-mass
+    # potential and stays trivially constant — the column would
+    # always read 0.0 and silently lie about integration health.
+    # Emit NaN in Mode A so consumers can spot the missing diagnostic.
+    track_energy = not scenario.integrator.ephemeris_perturbers
+    e0 = sim.energy() if track_energy else 0.0
 
     # Names in the order they were added — bodies first, then test particles —
     # which matches REBOUND's particle-array indexing. Both ASSIST and Mode B
@@ -161,7 +171,10 @@ def run(
             burn_idx += 1
 
         sim.integrate(sample_sim_t)
-        rel_err = abs((sim.energy() - e0) / e0) if e0 != 0 else 0.0
+        if track_energy:
+            rel_err = abs((sim.energy() - e0) / e0) if e0 != 0 else 0.0
+        else:
+            rel_err = float("nan")
 
         sim.serialize_particle_data(xyz=xyz_buf, vxvyvz=vxvyvz_buf)
         row_start = sample_idx * n_particles

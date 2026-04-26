@@ -11,7 +11,11 @@ Schema (see PLAN.md > "StateHistory schema"):
     x, y, z        float64    position in ICRF barycentric, km
     vx, vy, vz     float64    velocity in ICRF barycentric, km/s
     terminated     bool       True on impact/escape; NaN position thereafter
-    energy_rel_err float64    |ΔE/E0| at this sample (same across bodies)
+    energy_rel_err float64    |ΔE/E0| at this sample (same across bodies).
+                              NaN in Mode A scenarios — sim.energy() doesn't
+                              capture ASSIST's kernel-driven external forces,
+                              so the diagnostic is meaningless and we emit
+                              NaN rather than a misleading 0.0.
 
 File metadata (Parquet key/value):
     tomcosmos_run_metadata   JSON-encoded RunMetadata.to_dict()

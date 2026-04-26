@@ -114,6 +114,38 @@ def test_energy_stays_bounded_over_one_year() -> None:
     assert trace["energy_rel_err"].max() < 1e-6
 
 
+@pytest.mark.assist
+def test_mode_a_emits_nan_energy_rel_err(ephemeris_source: EphemerisSource) -> None:
+    """In Mode A, REBOUND's `sim.energy()` doesn't see ASSIST's kernel-
+    driven force callback, so the conserved-Hamiltonian diagnostic is
+    meaningless. Emit NaN — not a misleading 0.0 — so consumers can
+    spot the missing diagnostic. Trip wire for any future change that
+    silently reintroduces the bogus zero."""
+    pytest.importorskip("assist")
+    from tomcosmos.config import assist_asteroid_kernel, assist_planet_kernel
+    if not (assist_planet_kernel().exists() and assist_asteroid_kernel().exists()):
+        pytest.skip("ASSIST kernels not present")
+
+    scenario = Scenario.model_validate({
+        "schema_version": 1, "name": "mode-a-energy",
+        "epoch": "2026-01-01T00:00:00 TDB",
+        "duration": "10 day",
+        "integrator": {"name": "ias15", "ephemeris_perturbers": True},
+        "output": {"format": "parquet", "cadence": "1 day"},
+        "test_particles": [{
+            "name": "p", "ic": {
+                "type": "explicit", "frame": "icrf_barycentric",
+                "r": [AU_KM, 0.0, 0.0], "v": [0.0, EARTH_SPEED_KMS, 0.0],
+            },
+        }],
+    })
+    history = run(scenario, source=ephemeris_source, allow_dirty=True)
+    assert history.df["energy_rel_err"].isna().all(), (
+        "Mode A energy_rel_err should be NaN across every row; got "
+        f"{history.df['energy_rel_err'].unique()}"
+    )
+
+
 def test_earth_returns_near_start_after_one_year() -> None:
     history = run(_explicit_sun_earth_scenario(duration="1 yr"), source=_NoEphemerisNeeded())
     earth = history.body_trajectory("earth")
