@@ -22,7 +22,6 @@ dependencies:
   # parquet — pyvista has had slider regressions on newer releases.
   - pyvista=0.43.10
   - vtk=9.3.1
-  - trame>=3.5,<4
   # dev
   - pytest>=8,<9
   - pytest-xdist>=3.5,<4
