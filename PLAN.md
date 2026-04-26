@@ -22,12 +22,46 @@
 19. [Glossary](#glossary)
 
 ## Context
-Build a Python-based solar system simulator whose **accuracy tightens over milestones**. M1 ships with Sun + planets at learning-grade (the physics reads clearly — Lagrange points emerge naturally from N-body, Kepler's third law recoverable, energy bounded under symplectic integration — but Earth drifts ~2M km against JPL's ephemeris after 1 year because we lack moons and `GM`-direct masses). General-relativistic (1PN) corrections are already available as an opt-in effect (`effects: [gr]` on the integrator) implemented as a custom additional-force — no REBOUNDx dependency — so Mercury's perihelion precession is visible now. M2 adds major moons. M3 swaps in JPL `GM` values directly, targeting Earth 1-yr drift on the order of ~10,000 km. 3D visualization, with scope that grows from Sun+planets up to spacecraft-like test particles and small bodies. Motivation is learning orbital mechanics while building something that could plausibly end up useful. Shareability matters; packaging later is acceptable.
+Build a Python-based solar system simulator whose accuracy is **JPL Horizons grade** when configured for it, and that simultaneously supports counterfactual scenarios (Lagrange demos, hypothetical bodies, "what if Planet 9 existed"). Two integration modes share one codebase — see "Architecture: Mode A vs Mode B" below. Motivation is learning orbital mechanics while building something that could plausibly end up useful for asteroid / NEO / mission propagation. Shareability matters; packaging later is acceptable.
+
+## Architecture: Mode A vs Mode B
+
+The integrator runs in one of two modes, selected per scenario by `integrator.ephemeris_perturbers`. Both modes share the same `Scenario` schema, the same `EphemerisSource` for IC seeding, and the same I/O / viewer layer. They differ only in how gravity is computed inside the force loop.
+
+### Mode A — `ephemeris_perturbers: true` (REBOUND + ASSIST)
+
+Used for: accurate small-body / asteroid / NEO / mission propagation against the real solar system. Default for M5 work.
+
+- Force model is **ASSIST**'s force loop. Gravity for the Sun, eight planets, Moon, Pluto, and 16 large asteroid perturbers comes from JPL DE440 + sb441-n16 kernels, read directly. GR (1PN) and J2 oblateness are baked in.
+- Only test particles are integrated. Massive `Body` declarations are rejected by the schema — they would double-count the ephemeris.
+- Internal units: AU / day / Msun (matches ASSIST's force loop).
+- IC seeding for the test particles still goes through `EphemerisSource` (skyfield) at t₀ — ASSIST's body table is hardcoded to the perturbers it integrates against; for arbitrary moons or other objects, skyfield reads the appropriate NAIF SPK file once.
+
+### Mode B — `ephemeris_perturbers: false` (REBOUND + REBOUNDx)
+
+Used for: counterfactual scenarios. Default for everything M1-M4: Sun-Earth-L4 tadpole, Earth-Moon, Jupiter-Galileans, Earth-Mars Hohmann, "what if Planet 9 existed."
+
+- Force model is vanilla REBOUND N-body. Every massive body is declared explicitly in the scenario; their initial states come from `EphemerisSource` (skyfield reading DE440s + any opt-in satellite kernel) or from explicit r/v.
+- Optional `effects: [gr]` attaches REBOUNDx's `gr` force on top — Mercury's perihelion precession comes back, energy budget loosens to ~1e-7 instead of 1e-13 because GR is velocity-dependent.
+- Internal units: AU / yr / Msun.
+- Self-consistent: every body in the simulation feels every other body. Adding a hypothetical Planet 9 actually pulls on the planets, unlike Mode A where the planets are frozen ephemeris.
+- Drift from JPL truth accumulates over time (no PPN unless `gr` is on, no minor-body perturbers). Acceptable because Mode B's job is "scenarios where exact JPL agreement isn't the goal."
+
+### What lives where in the dependency tree
+
+| Library | Role | Modes that need it |
+|---|---|---|
+| `rebound` | N-body integration core | A and B |
+| `skyfield` | IC seeding from NAIF SPK kernels | A and B (always at t₀ only) |
+| `assist` | Mode A force loop, DE440 / sb441-n16 reader | A only |
+| `reboundx` | Mode B optional forces (`gr` today, Yarkovsky / radiation pressure later) | B only, only if `effects` non-empty |
+
+There are no parallel rails between the four. Each library plays a single role; dropping any one removes specific functionality without overlap. `spiceypy` and the previous Python-fallback GR implementation are gone — they were duplicates of skyfield and REBOUNDx-`gr` respectively.
 
 ## Non-goals
 
 Pinning these explicitly so scope doesn't creep across milestones:
-- **Non-gravitational forces.** No solar radiation pressure, Yarkovsky, outgassing, atmospheric drag. Small-body trajectories (M5) are pure-gravity approximations.
+- **Non-gravitational forces.** None today. Solar radiation pressure and Yarkovsky are reachable through REBOUNDx in Mode B once we want them — flagged in "Landed, opt-in, or deferred" below. Outgassing and atmospheric drag are out of scope. Small-body trajectories (M5) are pure-gravity approximations until REBOUNDx forces are wired in.
 - **Planetary rotation / orientation dynamics.** Spin axes are available as data for visualization, but no torque integration. No tidal dissipation.
 - **Mission-design optimization stacks.** tomcosmos provides primitives (Lambert solver in `tomcosmos.targeting`, two-body propagation, frame conversions, Δv events) and lets users compose them. Full optimization frameworks — multi-burn targeting, B-plane corrections, sequential convex programming, low-thrust trajectory optimization — remain out of scope. Lambert lets you target a planet at a future epoch; iterating on the result for, say, fuel-optimal Mars-to-Vesta-to-Ceres tour is a different product.
 - **Byte-identical cross-platform reproducibility.** Floating-point associativity under different BLAS/CPU combinations makes this intractable. Same-machine reruns agreeing to ~1e-10 is the bar.
@@ -37,9 +71,10 @@ Pinning these explicitly so scope doesn't creep across milestones:
 
 Not permanent omissions — each of the below is a specific tightening step on the accuracy envelope. Tracked together so the roadmap is in one place.
 
-- **General relativity (1PN)** — **landed M1**, opt-in. Custom additional-force via REBOUND's `additional_forces` hook; no REBOUNDx dependency (which doesn't build on win-64 and isn't on conda-forge). Enable per scenario with `integrator.effects: [gr]`. Treats the Sun as the dominant mass for the Einstein correction; recovers Mercury's perihelion precession (~43 arcsec/century) — empirically ~3,400 km shift versus pure Newtonian after 10 yr, ~43,000 km after 100 yr. Velocity-dependent force, so WHFast loses strict symplecticity when GR is on (energy bounded at ~1e-7 instead of 1e-13 over 10 yr — still physically correct). IAS15 handles it cleanly if you need tighter energy bookkeeping with GR.
+- **General relativity (1PN)** — landed, opt-in. In Mode A: baked into ASSIST's force loop alongside J2; not configurable. In Mode B: enable per scenario with `integrator.effects: [gr]`, which attaches REBOUNDx's `gr` force (Sun as dominant mass). Recovers Mercury's perihelion precession (~43 arcsec/century) — empirically ~3,400 km shift versus pure Newtonian after 10 yr, ~43,000 km after 100 yr. Velocity-dependent force, so WHFast loses strict symplecticity when GR is on (energy bounded at ~1e-7 instead of 1e-13 over 10 yr — still physically correct). IAS15 handles it cleanly if you need tighter energy bookkeeping with GR. REBOUNDx is a hard requirement in Mode B when `gr` is set; pure-Newtonian Mode B doesn't need it. (Earlier versions of this codebase kept a Python-fallback GR implementation; removed once REBOUNDx built reliably on Windows via our patched fork.)
 - **Major moons** — **M2**. Luna, the Galileans, Titan, Enceladus, Triton. Adding Luna alone empirically cuts Earth's 1-year drift roughly in half; the full set tightens Jupiter-system and Saturn-system dynamics by similar factors.
-- **JPL GM values instead of `m × G`** — **M3**. Masses in `constants.py` are re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Implementation: derive each body's internal mass at package load so downstream unit conversions stay unchanged. Can ride alongside the moons work in M2 if convenient.
+- **JPL GM values instead of `m × G`** — Mode B only (Mode A reads JPL constants directly via ASSIST). Masses in `constants.py` would be re-expressed so that `m_i × G_rebound == GM_i_JPL` for each body, lifting the ~1e-4 accuracy ceiling that comes from `G`'s 4-digit precision. Less critical now that Mode A exists for accuracy-sensitive work, but still on the table for tighter Mode B comparisons.
+- **Yarkovsky / radiation pressure** — Mode B, via REBOUNDx forces (`yarkovsky_effect`, `radiation_forces`). Not wired up yet; relevant once Mode B asteroid scenarios appear. Mode A doesn't need it for typical NEO work — JPL Horizons folds these into ephemeris updates rather than recomputing them per propagation.
 
 The M1 envelope (Earth 1-yr ≤ 2e6 km, see below) reflects *current default* scope (no moons, no GM-direct, GR off). Turning GR on doesn't meaningfully improve the Earth 1-yr baseline — Earth's GR precession is ~3.8 arcsec/century (Mercury is ~43), dominated by the moon and asteroid omissions. M3 target once moons + GM-direct land: Earth 1-yr on the order of ~1e4 km or better, with the same opt-in GR toggle still available for pedagogy.
 
@@ -65,7 +100,8 @@ C:\git\tommybship\tomcosmos\
 │       ├── state/          # "what's being simulated" — physics model
 │       │   ├── __init__.py
 │       │   ├── scenario.py    # Pydantic models (Scenario, Body, TestParticle, ...)
-│       │   ├── ephemeris.py   # EphemerisSource ABC + SkyfieldSource/SpiceSource
+│       │   ├── ephemeris.py   # EphemerisSource (skyfield-backed, IC-seed only)
+│       │   ├── effects.py     # Mode B physics effects (REBOUNDx attach helpers)
 │       │   ├── ic.py          # special IC computation (Lagrange, Keplerian, explicit)
 │       │   ├── integrator.py  # REBOUND wrapper, integrator selection from scenario
 │       │   ├── events.py      # Δv events, encounter callbacks
@@ -119,7 +155,7 @@ Wrap external stateful resources and things with lifecycle:
 
 ### ABCs for strategy interfaces
 Only when there are genuinely interchangeable implementations. Currently one:
-- `EphemerisSource` (ABC) with `SkyfieldSource` and `SpiceSource`. M1 uses skyfield; M2 switches to spiceypy for satellite kernels without changing any caller. The ABC defines `query(body_id, epoch) → (r, v)` and `available_bodies()`.
+- ~~`EphemerisSource` (ABC) with `SkyfieldSource` and `SpiceSource`.~~ Collapsed: there's a single concrete `EphemerisSource` class (skyfield-backed) used for IC seeding only. ASSIST reads its own kernels in Mode A's force loop and doesn't go through this class. Spiceypy was redundant with skyfield; removed.
 
 Don't pre-emptively ABC things with one implementation ("what if we swap integrators" — REBOUND already abstracts this; double-wrapping adds nothing).
 
@@ -170,8 +206,7 @@ Versions pinned to major-version ranges. Conda-forge is the source for everythin
 | `scipy` | `>=1.11,<2` | `optimize.brentq` for Lagrange quintic, Newton's method for Kepler's eq | M0 |
 | `rebound` | `>=4,<5` | N-body integrator (WHFast, IAS15, MERCURIUS) — **pip, not conda-forge** (no `win-64` build on conda-forge; PyPI ships Windows wheels) | M0 |
 | `astropy` | `>=6,<8` | Time scales (TDB/UTC/TT), units, constants, coordinate frames | M0 |
-| `skyfield` | `>=1.48,<2` | Ephemeris on-ramp for M1 | M1 |
-| `spiceypy` | `>=6,<8` | SPICE kernel access for satellite ephemerides | M2 |
+| `skyfield` | `>=1.48,<2` | NAIF SPK reader for IC seeding (both modes) | M1 |
 | `astroquery` | `>=0.4.6` | JPL Small-Body Database queries | M5 |
 | `pydantic` | `>=2.5,<3` | Scenario schema validation | M0 |
 | `pyyaml` | `>=6.0,<7` | YAML parsing for scenarios | M0 |
@@ -212,7 +247,6 @@ dependencies:
   # rebound is NOT on conda-forge for win-64; installed via pip from pyproject.toml
   - astropy>=6,<8
   - skyfield>=1.48,<2
-  - spiceypy>=6,<8
   - astroquery>=0.4.6
   - pydantic>=2.5,<3
   - pyyaml>=6.0,<7
@@ -256,7 +290,6 @@ dependencies = [
   "rebound>=4,<5",
   "astropy>=6,<8",
   "skyfield>=1.48,<2",
-  "spiceypy>=6,<8",
   "astroquery>=0.4.6",
   "pydantic>=2.5,<3",
   "pyyaml>=6.0,<7",
@@ -304,7 +337,7 @@ warn_return_any = false
 
 # untyped C-extension scientific deps — stubs don't exist, ignore missing imports:
 [[tool.mypy.overrides]]
-module = ["rebound.*", "spiceypy.*", "skyfield.*", "pyvista.*", "vtk.*", "trame.*", "astroquery.*"]
+module = ["rebound.*", "reboundx.*", "skyfield.*", "assist.*", "pyvista.*", "vtk.*", "trame.*", "astroquery.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -367,8 +400,10 @@ Use GitHub Issues as your milestone tracker. Create one issue per "M2 — Major 
 ## Architecture (three decoupled layers)
 
 ### 1. State layer — ephemeris + N-body, cleanly separated
-- **`spiceypy`** for ephemeris lookups and initial conditions (loads NAIF SPICE kernels — DE440 planetary, satellite kernels for moons). Pragmatic on-ramp: start with **`skyfield`** in M1 (pip-installable, no kernel wrangling), migrate to spiceypy in M2 when you need satellite data.
-- **`REBOUND`** as the N-body integrator. Integrator per milestone detailed below.
+- **`skyfield`** for ephemeris IC seeding (loads NAIF SPK kernels — DE440 planetary, satellite kernels for moons). Used at t₀ in both modes. (`spiceypy` was a parallel rail and has been removed; ASSIST reads its own DE440 / sb441-n16 inside Mode A's force loop.)
+- **`REBOUND`** as the N-body integrator core in both modes. Integrator per milestone detailed below.
+- **`assist`** wraps REBOUND with JPL's high-precision force loop in Mode A.
+- **`reboundx`** attaches optional forces (currently `gr`, future: Yarkovsky / radiation pressure) in Mode B.
 - **`astropy.time`** for time scales (TDB for dynamics, UTC only for display — don't mix them). **`astropy.units` / `astropy.constants`** to keep dimensions honest.
 - One frame throughout: **ICRF, solar-system barycenter origin.** SPICE gives ICs in this frame; REBOUND runs in it; transform only at the render step.
 
@@ -423,7 +458,7 @@ REBOUND provides three integrators we'll use. The rule of thumb: timestep ≤ ~5
 
 #### Ephemeris time-range validation
 - DE440 covers 1550-06-16 to 2650-01-25. Asking for epochs outside this range is a user error that should fail at scenario load, not mid-integration.
-- `Scenario` Pydantic validator checks that `epoch + duration` falls within the loaded ephemeris source's `time_range()`. `EphemerisSource.time_range()` is part of the ABC contract — each backend reports its own coverage.
+- `Scenario` Pydantic validator checks that `epoch + duration` falls within the loaded ephemeris source's `time_range()`. `EphemerisSource.time_range()` is the single concrete contract; coverage comes from the union/intersection of every loaded SPK kernel.
 - For extrapolation beyond the ephemeris range (e.g., long stability studies), the scenario can set `bodies[*].ic.source: explicit` and carry forward a state vector snapshot from a shorter bounded run.
 - **Example** (`scenarios/sun-planets.yaml`):
 
@@ -555,11 +590,11 @@ Event log (separate Parquet file, `runs/<basename>.events.parquet`):
   - `tests/test_smoke.py` imports `rebound`, creates a 2-body Simulation with our units helper, integrates one step, asserts it didn't crash. CI-ready even if CI is just `pytest` locally.
   - Exit criterion for M0: (1) `conda env create -f environment.yml && conda activate tomcosmos && pip install -e . && python scripts/hello_world.py && pytest` all succeed on a clean checkout; (2) CI smoke workflow green on the first push to `main`.
 
-- **M1 — Sun + 8 planets, validated; GR toggle shipped.** skyfield ICs at chosen epoch → REBOUND WHFast → pyvista with orbit trails. 1PN GR correction available as `integrator.effects: [gr]` via a custom additional-force (no REBOUNDx dependency).
+- **M1 — Sun + 8 planets, validated; GR toggle shipped.** skyfield ICs at chosen epoch → REBOUND WHFast → pyvista with orbit trails. 1PN GR correction available in Mode B as `integrator.effects: [gr]`, attaching REBOUNDx's `gr` force. (M1 originally shipped a Python 1PN implementation as a Windows-fallback for users who couldn't build REBOUNDx; that fallback was retired once our REBOUNDx fork built reliably on MSVC.)
   - **Exit criteria:** (1) `tomcosmos run scenarios/sun-planets.yaml` produces a Parquet file; (2) `tomcosmos view runs/sun-planets-baseline.parquet` opens the 3D viewer with all 9 bodies and trails; (3) tests in Tier 1 + Tier 2 pass; (4) Earth position after 1 simulated year matches the calibrated envelope (< 2e6 km for the default scenario); (5) `tomcosmos info` shows embedded metadata (git SHA, kernel hashes, energy-error series); (6) `effects: [gr]` on a Sun-Mercury scenario produces the expected 1PN perihelion shift versus pure Newtonian.
 
-- **M2 — Major moons.** Luna, Galileans, Titan, Saturnian system. Migrate to spiceypy for satellite kernels.
-  - **Exit criteria:** (1) Scenario including at least Earth+Moon and Jupiter+4 Galileans runs to completion with IAS15; (2) moons visibly orbit their primaries in the viewer (use the "follow body" camera on Jupiter to see Io zip around); (3) `EphemerisSource` ABC has both `SkyfieldSource` and `SpiceSource` implementations and tests parameterize over both; (4) energy error stays ≤1e-12 over a 10-year run.
+- **M2 — Major moons.** Luna, Galileans, Titan, Saturnian system. Skyfield reads NAIF satellite kernels (jup365, sat441, nep097, plu060, mar099) for IC seeding.
+  - **Exit criteria:** (1) Scenario including at least Earth+Moon and Jupiter+4 Galileans runs to completion with IAS15; (2) moons visibly orbit their primaries in the viewer (use the "follow body" camera on Jupiter to see Io zip around); (3) energy error stays ≤1e-12 over a 10-year run. (Originally exited with a parameterized `SkyfieldSource`/`SpiceSource` test matrix; collapsed to a single concrete `EphemerisSource` once the second backend earned no keep.)
 
 - **M3 — Test particles + Lagrange demo.** Massless particles with user-specified ICs. The "does the physics really work" milestone.
   - **Exit criteria:** (1) All three IC types (`explicit`, `lagrange`, `keplerian`) work and have unit tests; (2) `scenarios/sun-earth-l4-tadpole.yaml` runs for 50 years; (3) test particle stays within ±10° of L4's equilibrium in the Sun-Earth rotating frame — **and the rotating-frame camera shows the tadpole trajectory clearly**; (4) close-encounter logging (Hill-sphere entry/exit) fires for any particle that crosses the Hill radius of a body.
@@ -646,7 +681,7 @@ def run(scenario: Scenario, *, allow_dirty: bool = False) -> StateHistory:
     metadata = RunMetadata.capture(scenario)   # git_sha, kernel_hashes, versions, ...
 
     # 2. Resolve ephemeris source and check time range
-    source = EphemerisSource.for_scenario(scenario)   # SkyfieldSource or SpiceSource
+    source = EphemerisSource()   # skyfield-backed; reads kernel_dir() / *.bsp
     source.require_covers(scenario.epoch, scenario.duration)
 
     # 3. Resolve bodies: mass/radius from constants or explicit; IC from ephemeris or explicit
@@ -720,10 +755,9 @@ Three tiers, all under `pytest`. Run `pytest -n auto` for parallelism (via `pyte
 
 ### `conftest.py` patterns
 - **Top-level `tests/conftest.py`** — shared fixtures for the whole suite.
-- `@pytest.fixture(scope="session") spice_source()` — loads `de440s.bsp` once per pytest invocation (reload per-test is >1 s each, death by a thousand cuts).
-- `@pytest.fixture(scope="session") skyfield_source()` — same for skyfield's `de440s.bsp`.
+- `@pytest.fixture(scope="session") ephemeris_source()` — loads `de440s.bsp` (and any opt-in satellite kernels in `data/kernels/`) through skyfield once per pytest invocation. Reload per test would be >1 s each, death by a thousand cuts.
 - `@pytest.fixture tmp_runs_dir(tmp_path, monkeypatch)` — redirects `TOMCOSMOS_RUNS_DIR` to a per-test tmp path; every test that writes a run gets isolated output.
-- `@pytest.fixture baseline_scenario(spice_source)` — returns a parsed `Scenario` for Sun+8 planets at a fixed epoch; reused across physics-invariant tests.
+- `@pytest.fixture baseline_scenario(ephemeris_source)` — returns a parsed `Scenario` for Sun+8 planets at a fixed epoch; reused across physics-invariant tests.
 - **Every scenario in `scenarios/`** gets a parametrized Tier-1 smoke test in `tests/test_scenario_fixtures.py`: loads, validates, dry-runs the IC-resolution step. Catches silent scenario rot when the schema evolves without migrations being written.
 
 ## Special IC computation
@@ -870,7 +904,9 @@ Test tolerances (Tier 3) use this table directly. If a target tightens below wha
 ## Reuse — do not build these yourself
 (See the Dependency plan section for the full list with version pins; this is the physics-library shortlist.)
 - **`REBOUND`** — N-body integration. Do not roll your own integrator. WHFast/IAS15/MERCURIUS are world-class.
-- **`skyfield`** / **`spiceypy`** — ephemeris access. Do not parse DE/SPK kernels yourself.
+- **`skyfield`** — ephemeris access for IC seeding (NAIF SPK reader). Do not parse DE/SPK kernels yourself.
+- **`assist`** — Mode A force loop (DE440 + sb441-n16 perturbers, GR, J2). JPL high-precision integrator built on REBOUND.
+- **`reboundx`** — Mode B optional forces (`gr` today, future Yarkovsky / radiation pressure for asteroid work).
 - **`astropy`** — time scales, units, constants, coordinate frames. Don't reimplement TDB↔UTC or hand-roll unit handling.
 - **`scipy.optimize.brentq`** and Newton iteration — for Lagrange quintic and Kepler's equation. Don't write your own root finders.
 - **`pyvista`** — VTK wrapper. Don't touch VTK directly.
@@ -957,7 +993,9 @@ Jargon that appears throughout the plan, compressed.
 - **Libration** — oscillation around an equilibrium. A tadpole orbit librates around L4.
 - **MERCURIUS** — REBOUND's hybrid integrator: Wisdom-Holman far from encounters, IAS15 inside Hill spheres. Good for spacecraft.
 - **N-body** — simulation where every particle gravitationally affects every other. O(N²) naively; can be O(N) for test particles that don't affect massive bodies.
-- **NAIF / SPICE** — NASA's toolkit and file formats for ephemeris, attitude, and mission data. `spiceypy` is the Python binding.
+- **NAIF / SPICE** — NASA's toolkit and file formats for ephemeris, attitude, and mission data. `skyfield` is the SPK reader we use; `spiceypy` is NASA's official Python binding (we don't use it).
+- **ASSIST** — JPL high-precision N-body integrator built on REBOUND. Reads DE440 / sb441-n16 directly in the force loop; bakes in GR (1PN) and J2 oblateness. The "Mode A" half of tomcosmos's integrator architecture.
+- **REBOUNDx** — REBOUND extension package that adds optional forces (GR, tides, Yarkovsky, radiation pressure, ...). The "Mode B optional effects" half of tomcosmos's integrator architecture.
 - **Osculating orbital elements** — at any instant, the 6 Keplerian elements of the two-body orbit the particle is currently on, ignoring perturbations. Changes over time as perturbations act.
 - **Patched conics** — mission-design approximation: treat trajectory as sequential two-body orbits, each patched at the sphere-of-influence boundary. Cheap but loses Lagrange-point dynamics.
 - **PCK** — Planetary Constants Kernel. SPICE file type containing masses, radii, spin rates for solar system bodies.

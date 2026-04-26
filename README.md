@@ -11,7 +11,12 @@ A Python solar system state simulator: N-body integration with ephemeris-sourced
 
 ## Status
 
-**M1 — Sun + 8 planets, validated.** WHFast energy conservation holds at < 1e-10 relative over 10 years. Earth tracks ephemeris within ~2,000,000 km over one year; the bulk of that drift is physics the M1 model omits (moons, GR, `GM` vs. `G × m` precision), not integration error. M2 adds major moons (targeting roughly halved drift); M3 adds relativistic corrections via `REBOUNDx.gr` and JPL `GM` values, targeting Earth 1-yr drift on the order of ~10,000 km. See [PLAN.md](PLAN.md) for the full roadmap and the current accuracy envelope with M3 targets.
+Two integration modes share one codebase, picked per scenario by `integrator.ephemeris_perturbers`:
+
+- **Mode B** (default, `ephemeris_perturbers: false`): vanilla REBOUND, every massive body declared in the scenario. ICs come from skyfield (NAIF SPK kernels). Optional GR (1PN) via `effects: [gr]` attaches REBOUNDx's `gr` force. Use for Lagrange demos, Earth-Moon, Jupiter-Galileans, Earth-Mars Hohmann, and any "what if Planet 9 existed" scenario.
+- **Mode A** (`ephemeris_perturbers: true`): wraps REBOUND with [ASSIST](https://github.com/matthewholman/assist), JPL's high-precision integrator. Gravity for Sun, planets, Moon, Pluto, and 16 large asteroids comes from DE440 / sb441-n16 directly; GR + J2 are baked in. Test particles only (the major bodies are in the ephemeris). Use for asteroid / NEO / mission propagation against the real solar system.
+
+Both modes share the scenario schema, IC seeding layer, and viewer. See [PLAN.md > Architecture: Mode A vs Mode B](PLAN.md#architecture-mode-a-vs-mode-b) for details and the historical milestone roadmap (M1-M6).
 
 ## Quickstart
 
@@ -64,7 +69,7 @@ The surface exported from `tomcosmos` is pinned; anything not re-exported there 
 
 This simulator is learning-grade today and tightening. It doesn't yet model non-gravitational forces, tides, or planetary rotation (see [PLAN.md > Non-goals](PLAN.md#non-goals) for what's permanent and what's roadmap). The practical ceiling is ~1e-4 relative because we use `G × mass` rather than JPL's `GM` — M3 fixes that.
 
-General-relativistic (1PN) corrections ship as an opt-in scenario flag:
+General-relativistic (1PN) corrections in Mode B ship as an opt-in scenario flag:
 
 ```yaml
 integrator:
@@ -73,7 +78,7 @@ integrator:
   effects: [gr]
 ```
 
-When [REBOUNDx](https://github.com/dtamayo/reboundx) is installed, tomcosmos uses its `gr` force; otherwise a cross-validated Python 1PN implementation runs instead. Install REBOUNDx via `pip install 'tomcosmos[reboundx]'` on Linux/macOS; on Windows, install from [our patched fork](https://github.com/tommybship/reboundx/tree/windows-msvc-build) until the fix merges upstream (REBOUNDx's C source uses features MSVC doesn't accept — we track this in [dtamayo/reboundx#137](https://github.com/dtamayo/reboundx/issues/137)).
+This requires [REBOUNDx](https://github.com/dtamayo/reboundx). Install via `pip install 'tomcosmos[reboundx]'` on Linux/macOS; on Windows, install from [our patched fork](https://github.com/tommybship/reboundx/tree/windows-msvc-build) until the fix merges upstream (REBOUNDx's C source uses features MSVC doesn't accept — we track this in [dtamayo/reboundx#137](https://github.com/dtamayo/reboundx/issues/137)). Mode A doesn't use REBOUNDx — its force model already includes GR + J2 inside ASSIST.
 
 Measured envelope (same-machine reproducibility, baseline sun-planets scenario):
 

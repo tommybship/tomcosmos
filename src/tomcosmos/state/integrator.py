@@ -1,9 +1,24 @@
 """REBOUND wrapper: Scenario + ResolvedBody → rebound.Simulation.
 
-Internal units are AU / yr / Msun (gives G ≈ 39.48, numerically well-scaled
-for planetary dynamics). The I/O boundary is km / km·s⁻¹ / kg — everything
-entering this module gets converted once, and the integration loop converts
-back once per sample. This keeps force evaluations away from the mixing-
+Two modes — picked by `integrator.ephemeris_perturbers`:
+
+  - **Mode A** (`ephemeris_perturbers=True`): wrap the simulation with
+    `assist.Extras` so the force loop pulls gravity from DE440 / sb441-n16
+    directly. Real solar system at JPL precision; only test particles
+    are integrated (the schema validator enforces zero massive bodies).
+    Internal units are AU / day / Msun to match ASSIST's force model.
+    Used for accurate small-body / asteroid / mission propagation
+    against the real ephemeris.
+
+  - **Mode B** (`ephemeris_perturbers=False`): vanilla REBOUND, every
+    massive body declared explicitly in the scenario. Optional REBOUNDx
+    forces (currently `gr`) attach via `state.effects`. Internal units
+    are AU / yr / Msun. Used for counterfactual scenarios — Lagrange
+    demos, hypothetical systems, "what if Planet 9 existed."
+
+The I/O boundary is km / km·s⁻¹ / kg in both modes — everything entering
+this module gets converted once, and the integration loop converts back
+once per sample. This keeps force evaluations away from the mixing-
 large-and-small-numbers regime that eats float64 precision.
 
 Unit discipline lives in this module. Nothing that calls us needs to know.

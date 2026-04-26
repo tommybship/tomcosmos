@@ -29,19 +29,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional: REBOUNDx for additional physics effects (GR, SRP, tides, ...).
-# Linux/macOS: pip install 'tomcosmos[reboundx]' pulls from PyPI.
-# Windows: REBOUNDx's PyPI source doesn't build with MSVC; install from
-# our patched fork until the fixes merge upstream:
+# REBOUNDx for Mode B physics effects (GR via `gr_full`, plus future
+# Yarkovsky / radiation-pressure forces for asteroid work). Required
+# whenever a Mode B scenario sets `integrator.effects` to a non-empty
+# list; pure-Newtonian Mode B does not need it. Mode A's force model
+# (ASSIST) bakes GR + J2 into its own loop and never touches REBOUNDx.
+# Linux/macOS: `pip install 'tomcosmos[reboundx]'`.
+# Windows: REBOUNDx's PyPI source doesn't build with MSVC; install
+# from our patched fork until the fixes merge upstream:
 #   pip install git+https://github.com/tommybship/reboundx.git@windows-msvc-build
-# When not installed, tomcosmos falls back to a Python 1PN GR implementation
-# automatically — the `effects: [gr]` toggle still works either way.
 reboundx = ["reboundx>=4.6,<5"]
-# Optional: ASSIST for high-precision ephemeris-aware integration. Scenarios
-# with `integrator.ephemeris_perturbers=True` require this; everything else
-# continues to use vanilla REBOUND. Linux/macOS: `pip install assist`.
-# Windows: ASSIST upstream doesn't build with MSVC; install from our fork
-# until the port lands upstream:
+# ASSIST for Mode A high-precision ephemeris-aware integration.
+# Required whenever `integrator.ephemeris_perturbers=True`; everything
+# else (Mode B) continues to use vanilla REBOUND.
+# Linux/macOS: `pip install 'tomcosmos[assist]'`.
+# Windows: ASSIST upstream doesn't build with MSVC; install from our
+# fork until the port lands upstream:
 #   pip install git+https://github.com/tommybship/assist.git@windows-msvc-build
 assist = ["assist>=1.1.9"]
 dev = [

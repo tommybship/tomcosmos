@@ -250,22 +250,25 @@ class IntegratorConfig(_StrictModel):
     r_crit_hill: float | None = Field(default=None, gt=0)
     effects: list[Literal["gr"]] = Field(default_factory=list)
     ephemeris_perturbers: bool = False
-    """When True, the integrator backend wraps REBOUND with ASSIST's
-    `Extras` and applies high-precision gravitational perturbations
-    from the Sun, planets, Moon, and 16 large asteroids using
-    DE440/sb441-n16 kernels read directly in the force loop. Adds
-    GR (1PN) and J2 oblateness for the major bodies as well — these
-    are part of ASSIST's default force set, not optional toggles.
+    """Mode switch.
 
-    Massive bodies in the scenario become ill-defined when this is
-    on (the planets are already in the ephemeris; adding them as
-    integrated particles double-counts gravity). The runner enforces
-    this: with ephemeris_perturbers=True, only test particles are
-    allowed.
+    True → **Mode A**: wrap REBOUND with `assist.Extras`. Gravity for
+    the Sun, planets, Moon, and 16 large asteroids comes directly from
+    DE440 / sb441-n16; GR (1PN) and J2 oblateness are baked into the
+    force model and are not optional. Only test particles are
+    integrated — declared massive bodies double-count the ephemeris
+    and are rejected by the schema. Use for asteroid / NEO / mission
+    propagation against the real solar system.
 
-    Off by default to keep M1-M4 scenarios behavior-equivalent to
-    vanilla REBOUND. Turn on for asteroid-tracking and accurate
-    small-body work (M5)."""
+    False → **Mode B**: vanilla REBOUND. Every massive body is
+    declared explicitly. Optional `effects` (currently `gr` via
+    REBOUNDx's `gr` force) attach on top. Use for Lagrange demos,
+    counterfactual scenarios, and any case where the user needs to
+    add a body the JPL ephemeris doesn't know about (hypothetical
+    Planet 9, a moon-as-massive-body experiment, etc).
+
+    Off by default — Mode B is what every M1-M4 scenario and most
+    pedagogical demos want."""
 
     @model_validator(mode="after")
     def _timestep_matches_integrator(self) -> IntegratorConfig:
