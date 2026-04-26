@@ -1,0 +1,42 @@
+schema_version: 1
+name: jupiter-2x-mass
+# Counterfactual: what if Jupiter were 2× its real mass, starting now?
+#
+# Every body's initial position and velocity comes from DE440 at the
+# epoch — same starting state as scenarios/sun-planets.yaml. The only
+# difference is `mass_kg` on the Jupiter line: 3.7964e27 kg instead of
+# 1.8982e27. REBOUND uses our value (overriding BODY_CONSTANTS), so
+# from t=0 onward the inner planets feel a 2× Jupiter pull.
+#
+# Visible effects over 100 years:
+#   - Saturn's 2:5 resonance lock with Jupiter strengthens; Saturn's
+#     orbit shifts measurably outward and its eccentricity oscillates
+#     more sharply.
+#   - Inner-planet perihelia precess faster (Jupiter is the dominant
+#     perturber for Mercury/Venus/Earth).
+#   - Mars's eccentricity wobble visibly amplifies.
+#
+# The Sun + 8-planet baseline is decoupled-enough that 100 years
+# stays bounded — none of this destabilizes the inner system on
+# century timescales — but the trails differ visibly from the real
+# `sun-planets.yaml` run when viewed side-by-side.
+#
+# Default DE440s kernel (~32 MB) covers this; no extra fetch needed.
+epoch: "2026-04-23T00:00:00 TDB"
+duration: "100 yr"
+integrator:
+  name: whfast
+  timestep: "1 day"
+output:
+  format: parquet
+  cadence: "30 day"
+bodies:
+  - { name: sun,     spice_id: 10,  ic: { source: ephemeris } }
+  - { name: mercury, spice_id: 199, ic: { source: ephemeris } }
+  - { name: venus,   spice_id: 299, ic: { source: ephemeris } }
+  - { name: earth,   spice_id: 399, ic: { source: ephemeris } }
+  - { name: mars,    spice_id: 499, ic: { source: ephemeris } }
+  - { name: jupiter, spice_id: 599, mass_kg: 3.7964e27, ic: { source: ephemeris } }
+  - { name: saturn,  spice_id: 699, ic: { source: ephemeris } }
+  - { name: uranus,  spice_id: 799, ic: { source: ephemeris } }
+  - { name: neptune, spice_id: 899, ic: { source: ephemeris } }

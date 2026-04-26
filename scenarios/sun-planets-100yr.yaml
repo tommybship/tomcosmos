@@ -1,0 +1,23 @@
+schema_version: 1
+name: sun-planets-100yr
+# Real-Jupiter 100-year baseline. Identical to scenarios/jupiter-2x-mass.yaml
+# in every way except Jupiter's mass — the matched control for the 2× Jupiter
+# counterfactual.
+epoch: "2026-04-23T00:00:00 TDB"
+duration: "100 yr"
+integrator:
+  name: whfast
+  timestep: "1 day"
+output:
+  format: parquet
+  cadence: "30 day"
+bodies:
+  - { name: sun,     spice_id: 10,  ic: { source: ephemeris } }
+  - { name: mercury, spice_id: 199, ic: { source: ephemeris } }
+  - { name: venus,   spice_id: 299, ic: { source: ephemeris } }
+  - { name: earth,   spice_id: 399, ic: { source: ephemeris } }
+  - { name: mars,    spice_id: 499, ic: { source: ephemeris } }
+  - { name: jupiter, spice_id: 599, ic: { source: ephemeris } }
+  - { name: saturn,  spice_id: 699, ic: { source: ephemeris } }
+  - { name: uranus,  spice_id: 799, ic: { source: ephemeris } }
+  - { name: neptune, spice_id: 899, ic: { source: ephemeris } }
