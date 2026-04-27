@@ -65,6 +65,11 @@ _RAW: tuple[BodyConstant, ...] = (
     BodyConstant("hydra",    4.8e16,    50.9,     "#BDB6A8", 903),
     BodyConstant("kerberos", 1.65e16,   19.0,     "#A89F90", 904),
     BodyConstant("styx",     7.5e15,    16.0,     "#A89F90", 905),
+    # --- Selected named asteroids (M5 demos). NAIF IDs follow the
+    # SPICE convention 2,000,000 + asteroid number for numbered objects.
+    # spice_id is metadata only; asteroid IC comes from explicit r/v in
+    # the scenario, not skyfield. Radii / masses from JPL SBDB. ---
+    BodyConstant("apophis",  6.1e10,    0.170,    "#7A6F65", 2099942),
 )
 
 BODY_CONSTANTS: dict[str, BodyConstant] = {b.name: b for b in _RAW}

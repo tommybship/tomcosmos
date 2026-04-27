@@ -20,6 +20,7 @@ snapshot tests are marked `viewer` and gated on CI.
 """
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 import numpy as np
@@ -44,6 +45,15 @@ _LOG_EARTH_TARGET_AU: float = 0.005
 _LOG_SCALE_EXPONENT: float = 0.3
 
 _DEFAULT_COLOR = "#CCCCCC"  # for bodies not in BODY_CONSTANTS
+
+# Display radius (in km) for bodies absent from BODY_CONSTANTS. Earth's
+# radius was the original fallback, but that's catastrophic at close-up
+# scales: a test particle 38,000 km from Earth gets rendered with the
+# same display radius as Earth itself, engulfing the camera. 1 km is
+# asteroid-scale and disappears at solar-system zoom — visible only when
+# the user zooms in significantly, which is what they're doing if they
+# care about an unnamed test particle.
+_UNKNOWN_RADIUS_KM: float = 1.0
 
 # When a scenario declares more test particles than this, the viewer
 # renders them as a single point-cloud `pv.PolyData` instead of one
@@ -477,7 +487,19 @@ def _display_radius_au(body_name: str, scaling: Scaling) -> float:
         const = resolve_body_constant(body_name)
         radius_km = const.radius_km
     except UnknownBodyError:
-        radius_km = _EARTH_RADIUS_KM  # fall back to Earth-ish if unknown
+        # Suffix-aware fallback: scripts/overlay_runs.py renames overlay
+        # bodies by appending a marker (default '*') so colors fall back
+        # to grey via BODY_CONSTANTS miss. Sizes shouldn't fall back the
+        # same way — strip a trailing non-alphanumeric suffix and retry
+        # so e.g. 'apophis*' picks up Apophis's real 0.17 km radius.
+        stripped = re.sub(r"[^a-z0-9]+$", "", body_name.lower())
+        if stripped and stripped != body_name.lower():
+            try:
+                radius_km = resolve_body_constant(stripped).radius_km
+            except UnknownBodyError:
+                radius_km = _UNKNOWN_RADIUS_KM
+        else:
+            radius_km = _UNKNOWN_RADIUS_KM
 
     if scaling == "true":
         return radius_km / _AU_KM

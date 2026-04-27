@@ -1,0 +1,26 @@
+schema_version: 1
+name: apophis-2029-flyby-context
+# Companion to scenarios/apophis-2029-flyby.yaml. The Mode A flyby
+# parquet only stores Apophis (the only integrated test particle); the
+# Sun, Earth, and Moon are computed from DE440 at force-eval time but
+# never written to disk. To visualize the flyby with the viewer's
+# `--follow earth` camera, you need Earth's trajectory in a parquet.
+#
+# That's what this scenario produces: a Mode B Sun + Earth + Moon
+# integration over the same epoch / duration / cadence as the Mode A
+# flyby. Overlay both with scripts/overlay_runs.py and you get the
+# full visualization (Earth + Moon + Sun in canonical colors, Apophis
+# as a grey overlay) in one viewer.
+#
+# Default DE440s kernel covers this; no extra fetch needed.
+epoch: "2029-04-09T00:00:00 TDB"
+duration: "10 day"
+integrator:
+  name: ias15
+output:
+  format: parquet
+  cadence: "600 s"
+bodies:
+  - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
+  - { name: earth, spice_id: 399, ic: { source: ephemeris } }
+  - { name: moon,  spice_id: 301, ic: { source: ephemeris } }
