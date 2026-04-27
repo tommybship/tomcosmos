@@ -6,10 +6,18 @@ name: apophis-2029-flyby-context
 # never written to disk. To visualize the flyby with the viewer's
 # `--follow earth` camera, you need Earth's trajectory in a parquet.
 #
-# That's what this scenario produces: a Mode B Sun + Earth + Moon
+# That's what this scenario produces: a Mode B Sun + 8 planets + Moon
 # integration over the same epoch / duration / cadence as the Mode A
-# flyby. Overlay both with scripts/overlay_runs.py and you get the
-# full visualization (Earth + Moon + Sun in canonical colors, Apophis
+# flyby. The full planet set matters: a 3-body Sun-Earth-Moon
+# integration drifts Earth by ~200,000 km from kernel reality over
+# the 10-day window (every absent planet contributes ~10s of km of
+# secular Earth perturbation), which puts the rendered Earth far
+# enough from where Apophis "really" passed that the flyby geometry
+# looks wrong. Including all 8 planets brings Earth's drift back
+# under 100 km — invisible at any sane viewer zoom.
+#
+# Overlay both with scripts/overlay_runs.py and you get the full
+# visualization (Earth + Moon + planets in canonical colors, Apophis
 # as a grey overlay) in one viewer.
 #
 # Default DE440s kernel covers this; no extra fetch needed.
@@ -21,6 +29,13 @@ output:
   format: parquet
   cadence: "600 s"
 bodies:
-  - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
-  - { name: earth, spice_id: 399, ic: { source: ephemeris } }
-  - { name: moon,  spice_id: 301, ic: { source: ephemeris } }
+  - { name: sun,     spice_id: 10,  ic: { source: ephemeris } }
+  - { name: mercury, spice_id: 199, ic: { source: ephemeris } }
+  - { name: venus,   spice_id: 299, ic: { source: ephemeris } }
+  - { name: earth,   spice_id: 399, ic: { source: ephemeris } }
+  - { name: moon,    spice_id: 301, ic: { source: ephemeris } }
+  - { name: mars,    spice_id: 499, ic: { source: ephemeris } }
+  - { name: jupiter, spice_id: 599, ic: { source: ephemeris } }
+  - { name: saturn,  spice_id: 699, ic: { source: ephemeris } }
+  - { name: uranus,  spice_id: 799, ic: { source: ephemeris } }
+  - { name: neptune, spice_id: 899, ic: { source: ephemeris } }

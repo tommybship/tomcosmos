@@ -66,7 +66,7 @@ _UNKNOWN_RADIUS_KM: float = 1.0
 _BULK_COHORT_THRESHOLD: int = 20
 _BULK_POINT_COLOR_HEX: str = "#FFFFFF"
 
-Scaling = Literal["true", "log", "marker"]
+Scaling = Literal["true", "log", "marker", "auto"]
 
 
 class Viewer:
@@ -156,6 +156,7 @@ class Viewer:
             self._bulk_positions_au = np.empty((self._n_samples, 0, 3), dtype=np.float64)
         self._bulk_polydata: pv.PolyData | None = None
         self._time_overlay_actor: object | None = None
+        self._scaling_K: float = self._compute_auto_scaling_K()
         self._build_time_axis()
         self._build_scene()
 
@@ -287,11 +288,96 @@ class Viewer:
                 polyline, color=color, line_width=1.5, opacity=0.6,
             )
 
+    def _compute_auto_scaling_K(self) -> float:
+        """For scaling='auto': pick a uniform exaggeration K so each body
+        renders large enough to see without engulfing nearby orbits.
+
+        The rule: K = 0.15 * (smallest pairwise min separation in the
+        cohort) / (largest true radius in the cohort), clamped to >= 1.0
+        so we never shrink below physical scale.
+
+        In follow mode the cohort is the followed body plus its tight
+        neighborhood (matches `_set_top_down_camera`'s cohort detection),
+        so the central star — light-years bigger than a moon and an
+        AU+ away — doesn't constrain the framing of an Earth-Moon view.
+
+        In non-follow mode there's no natural cohort so we return 1.0,
+        and `_display_radius_au` falls back to log scaling — which is
+        what made solar-system views work before this scaling existed.
+        """
+        if self._scaling != "auto":
+            return 1.0
+        if self._follow is None:
+            # No cohort to compute K from — signal log fallback via 0.0.
+            # `_display_radius_au` treats K==0 as the only "use log" case,
+            # so K==1 from a tight scenario still means true scale.
+            return 0.0
+        n_probe = min(self._n_samples, 32)
+        if n_probe < 1:
+            return 1.0
+        sample_idxs = np.linspace(0, self._n_samples - 1, n_probe, dtype=int)
+        follow_pts = self._positions_au[self._follow]
+        per_body_max: dict[str, float] = {}
+        for name, pts in self._positions_au.items():
+            if name == self._follow:
+                continue
+            d = float(max(
+                np.linalg.norm(pts[i] - follow_pts[i]) for i in sample_idxs
+            ))
+            per_body_max[name] = d
+        if not per_body_max:
+            return 1.0
+        closest = min(per_body_max.values())
+        cohort = [n for n, d in per_body_max.items() if d <= closest * 5.0]
+        cohort_with_focal = [self._follow, *cohort]
+        if len(cohort_with_focal) < 2:
+            return 1.0
+        # Smallest separation across the run, considering every pair
+        # where at least one side is in the cohort. A body that's not in
+        # the cohort overall but flies through it briefly (like Apophis
+        # threading past Earth) still constrains K — otherwise the
+        # rendered cohort body's display sphere can engulf the visitor
+        # at closest approach.
+        cohort_set = set(cohort_with_focal)
+        all_names = list(self._positions_au.keys())
+        min_sep_au = float("inf")
+        for i, name_i in enumerate(all_names):
+            for name_j in all_names[i + 1:]:
+                if name_i not in cohort_set and name_j not in cohort_set:
+                    continue
+                pts_i = self._positions_au[name_i]
+                pts_j = self._positions_au[name_j]
+                d = float(np.linalg.norm(pts_i - pts_j, axis=1).min())
+                if d < min_sep_au:
+                    min_sep_au = d
+        if not np.isfinite(min_sep_au) or min_sep_au <= 0:
+            return 1.0
+        # Largest true radius in the cohort.
+        max_r_km = 0.0
+        for name in cohort_with_focal:
+            try:
+                r_km = resolve_body_constant(name).radius_km
+            except UnknownBodyError:
+                stripped = re.sub(r"[^a-z0-9]+$", "", name.lower())
+                if stripped and stripped != name.lower():
+                    try:
+                        r_km = resolve_body_constant(stripped).radius_km
+                    except UnknownBodyError:
+                        r_km = _UNKNOWN_RADIUS_KM
+                else:
+                    r_km = _UNKNOWN_RADIUS_KM
+            if r_km > max_r_km:
+                max_r_km = r_km
+        if max_r_km <= 0:
+            return 1.0
+        k = 0.15 * (min_sep_au * _AU_KM) / max_r_km
+        return max(k, 1.0)
+
     def _add_bodies(self) -> None:
         for name, pts in self._positions_au.items():
             if name in self._bulk_cohort_set:
                 continue
-            radius_au = _display_radius_au(name, self._scaling)
+            radius_au = _display_radius_au(name, self._scaling, self._scaling_K)
             mesh, texture = self._load_textured_or_sphere(name, radius_au)
             if texture is not None:
                 actor = self._plotter.add_mesh(
@@ -481,8 +567,17 @@ def _positions_by_body(history: StateHistory) -> dict[str, np.ndarray]:
     return out
 
 
-def _display_radius_au(body_name: str, scaling: Scaling) -> float:
-    """Per-body display radius in AU according to the chosen scaling mode."""
+def _display_radius_au(
+    body_name: str, scaling: Scaling, k_auto: float = 1.0,
+) -> float:
+    """Per-body display radius in AU according to the chosen scaling mode.
+
+    `k_auto` is the exaggeration factor produced by
+    `Viewer._compute_auto_scaling_K()`. Only consulted when
+    `scaling=='auto'`; ignored for the other modes. A value of 1.0
+    means the auto path falls back to log behavior (e.g. when there's
+    no follow target to define a cohort).
+    """
     try:
         const = resolve_body_constant(body_name)
         radius_km = const.radius_km
@@ -510,6 +605,18 @@ def _display_radius_au(body_name: str, scaling: Scaling) -> float:
         # Fixed small AU-sized marker — good enough until billboarded
         # markers arrive in a later iteration.
         return 0.01
+    if scaling == "auto":
+        # k_auto == 0.0 is the sentinel for "auto couldn't compute a
+        # cohort-aware K" (no follow target). Fall back to log so the
+        # user gets a sensible solar-system view rather than bodies at
+        # physical scale (sub-pixel). For K >= 1.0 (which includes the
+        # K=1 clamp from a tight flyby scenario), apply K * true radius
+        # — at K=1 that's true scale, the right answer when bodies are
+        # already as big as nearby separations allow.
+        if k_auto == 0.0:
+            ratio = radius_km / _EARTH_RADIUS_KM
+            return float(_LOG_EARTH_TARGET_AU * (ratio ** _LOG_SCALE_EXPONENT))
+        return k_auto * radius_km / _AU_KM
     raise ValueError(f"unknown scaling mode: {scaling!r}")
 
 

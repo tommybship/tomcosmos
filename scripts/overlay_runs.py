@@ -37,11 +37,12 @@ def main() -> None:
         help="Body name to keep centered in the viewport (e.g. earth).",
     )
     parser.add_argument(
-        "--scaling", default="log", choices=("log", "true", "marker"),
+        "--scaling", default="log", choices=("log", "true", "marker", "auto"),
         help="Body size scaling. 'log' (default) exaggerates radii so all "
              "bodies are visible at solar-system zoom. 'true' renders at "
-             "physical size — necessary for close-up flybys where log "
-             "scaling makes bodies engulf each other.",
+             "physical size. 'auto' (with --follow) picks an exaggeration "
+             "that makes bodies visible without engulfing nearby orbits — "
+             "good for sub-system views like Earth-Moon.",
     )
     parser.add_argument(
         "--suffix", default="*",

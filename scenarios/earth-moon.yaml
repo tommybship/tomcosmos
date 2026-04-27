@@ -4,13 +4,18 @@ name: earth-moon
 # Uses IAS15 because the Moon's 27-day orbit + 1-day timestep
 # is borderline for WHFast; IAS15 is adaptive and handles it cleanly.
 # Default DE440s kernel (32 MB) covers everything — no extra fetch needed.
+#
+# Output cadence: 1 hour. The Moon traverses ~13°/day, so 1-day cadence
+# gives only ~30 frames per lunar orbit — visually choppy in the
+# viewer. 1-hour cadence (~720 samples) lets the orbit play smoothly
+# and the file is still tiny (a few hundred kB).
 epoch: "2026-04-23T00:00:00 TDB"
 duration: "30 day"
 integrator:
   name: ias15
 output:
   format: parquet
-  cadence: "1 day"
+  cadence: "1 hour"
 bodies:
   - { name: sun,   spice_id: 10,  ic: { source: ephemeris } }
   - { name: earth, spice_id: 399, ic: { source: ephemeris } }
