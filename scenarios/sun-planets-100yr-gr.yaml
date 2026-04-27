@@ -1,0 +1,28 @@
+schema_version: 1
+name: sun-planets-100yr-gr
+# Identical to sun-planets-100yr.yaml but with REBOUNDx's 1PN GR force
+# attached. The matched Newtonian/GR pair is the canonical Mercury
+# perihelion precession demo: at 100 yr, Mercury's perihelion in this
+# run is offset from its Newtonian-only twin by ~43"/century × 1 century
+# = 43 arcseconds, or ~9,600 km of transverse displacement at Mercury's
+# perihelion radius (0.307 AU). Run scripts/mercury_precession.py to
+# compute the drift directly from both parquets.
+epoch: "2026-04-23T00:00:00 TDB"
+duration: "100 yr"
+integrator:
+  name: whfast
+  timestep: "1 day"
+  effects: [gr]
+output:
+  format: parquet
+  cadence: "30 day"
+bodies:
+  - { name: sun,     spice_id: 10,  ic: { source: ephemeris } }
+  - { name: mercury, spice_id: 199, ic: { source: ephemeris } }
+  - { name: venus,   spice_id: 299, ic: { source: ephemeris } }
+  - { name: earth,   spice_id: 399, ic: { source: ephemeris } }
+  - { name: mars,    spice_id: 499, ic: { source: ephemeris } }
+  - { name: jupiter, spice_id: 599, ic: { source: ephemeris } }
+  - { name: saturn,  spice_id: 699, ic: { source: ephemeris } }
+  - { name: uranus,  spice_id: 799, ic: { source: ephemeris } }
+  - { name: neptune, spice_id: 899, ic: { source: ephemeris } }
