@@ -195,16 +195,20 @@ class Viewer:
                 )
         for name, actor in self._body_actors.items():
             pos = self._positions_au[name][sample_idx]
-            actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
             r_matrix = self._rotation_matrices.get(name)
-            if r_matrix is not None:
-                # vtkProp3D's transform stack is T(pos) * UserMatrix in
-                # post-multiply mode, so a rotation-only user matrix is
-                # applied first (mesh-frame → ICRF orientation) and the
-                # actor's position translates afterward — exactly what
-                # we want. No need to bake pos into the matrix.
+            if r_matrix is None:
+                actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
+            else:
+                # vtkProp3D's PostMultiply transform stack applies the
+                # UserMatrix LAST, so it rotates the actor's translated
+                # position too: p_world = UserMatrix * (mesh_p + pos)
+                # = R*mesh_p + R*pos. To avoid the unwanted R*pos, bake
+                # the position into the matrix's translation column and
+                # zero actor.position so VTK has nothing to rotate.
                 m = np.eye(4)
                 m[:3, :3] = r_matrix[sample_idx]
+                m[:3, 3] = pos
+                actor.position = (0.0, 0.0, 0.0)
                 actor.user_matrix = m
         for name, label_actor in self._label_actors.items():
             pos = self._positions_au[name][sample_idx]

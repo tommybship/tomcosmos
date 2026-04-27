@@ -73,13 +73,28 @@ def test_viewer_registers_body_actors() -> None:
 
 
 def test_set_sample_updates_positions() -> None:
+    """Earth's rendered position changes across samples.
+
+    Bodies with IAU rotation data have their position baked into
+    ``actor.user_matrix``'s translation column (so VTK's PostMultiply
+    UserMatrix doesn't rotate the position vector), with
+    ``actor.position`` zeroed. Reading via ``GetMatrix()`` picks up
+    either path.
+    """
+    import vtk
     from tomcosmos.viz.pyvista_viewer import Viewer
     history = _fresh_history()
     viewer = Viewer(history, off_screen=True)
+
+    def world_position(actor: object) -> np.ndarray:
+        m = vtk.vtkMatrix4x4()
+        actor.GetMatrix(m)  # type: ignore[attr-defined]
+        return np.array([m.GetElement(0, 3), m.GetElement(1, 3), m.GetElement(2, 3)])
+
     viewer.set_sample(0)
-    p0 = np.array(viewer._body_actors["earth"].GetPosition())  # noqa: SLF001
+    p0 = world_position(viewer._body_actors["earth"])  # noqa: SLF001
     viewer.set_sample(history.n_samples - 1)
-    p1 = np.array(viewer._body_actors["earth"].GetPosition())  # noqa: SLF001
+    p1 = world_position(viewer._body_actors["earth"])  # noqa: SLF001
     assert not np.allclose(p0, p1), "Earth should move across samples"
 
 
