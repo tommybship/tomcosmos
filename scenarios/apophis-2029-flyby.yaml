@@ -1,0 +1,34 @@
+schema_version: 1
+name: apophis-2029-flyby
+# Asteroid 99942 Apophis's 2029-04-13 close approach to Earth — passes
+# within ~32,000 km of Earth's center, closer than geosynchronous orbit.
+# 10-day window at 10-minute cadence renders the flyby geometry cleanly
+# in `tomcosmos view --follow earth`.
+#
+# Mode A (ASSIST) integration: Apophis is a test particle; gravity from
+# the Sun, planets, Moon, and 16 large asteroids comes directly from
+# DE440 + sb441-n16.
+#
+# Requires the ASSIST kernels:
+#   tomcosmos fetch-kernels --include assist
+# (~770 MB one-time download.)
+#
+# IC was queried from JPL Horizons at the scenario epoch (2029-04-09T00:00:00 TDB) —
+# Horizons's value is the result of JPL's full N-body propagation from
+# the most-recent orbit fit up to that instant. To refresh against the
+# latest Horizons orbit fit, re-run scripts/build_apophis_2029_flyby_scenario.py.
+epoch: "2029-04-09T00:00:00 TDB"
+duration: "10 day"
+integrator:
+  name: ias15
+  ephemeris_perturbers: true
+output:
+  format: parquet
+  cadence: "600 s"
+test_particles:
+  - name: apophis
+    ic:
+      type: explicit
+      frame: icrf_barycentric
+      r: [-143305060.42740384, -46105866.000963725, -20739745.033099532]
+      v: [13.437705704786744, -23.111270159150028, -8.241055889883855]
