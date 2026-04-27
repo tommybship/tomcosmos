@@ -160,7 +160,7 @@ class Viewer:
             self._bulk_positions_au = np.empty((self._n_samples, 0, 3), dtype=np.float64)
         self._bulk_polydata: pv.PolyData | None = None
         self._time_overlay_actor: object | None = None
-        self._scaling_K: float = self._compute_auto_scaling_K()
+        self._scaling_K: float = self._compute_auto_scaling_k()
         # (n_samples, 3, 3) IAU rotation matrices per body that has
         # rotation data. Built once in _build_time_axis (which already
         # computes per-sample J2000-offset days for the slider). Empty
@@ -336,7 +336,7 @@ class Viewer:
                 polyline, color=color, line_width=1.5, opacity=0.6,
             )
 
-    def _compute_auto_scaling_K(self) -> float:
+    def _compute_auto_scaling_k(self) -> float:
         """For scaling='auto': pick a uniform exaggeration K so each body
         renders large enough to see without engulfing nearby orbits.
 
@@ -621,7 +621,7 @@ def _display_radius_au(
     """Per-body display radius in AU according to the chosen scaling mode.
 
     `k_auto` is the exaggeration factor produced by
-    `Viewer._compute_auto_scaling_K()`. Only consulted when
+    `Viewer._compute_auto_scaling_k()`. Only consulted when
     `scaling=='auto'`; ignored for the other modes. A value of 1.0
     means the auto path falls back to log behavior (e.g. when there's
     no follow target to define a cohort).

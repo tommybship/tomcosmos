@@ -82,6 +82,7 @@ def test_set_sample_updates_positions() -> None:
     either path.
     """
     import vtk
+
     from tomcosmos.viz.pyvista_viewer import Viewer
     history = _fresh_history()
     viewer = Viewer(history, off_screen=True)
