@@ -46,6 +46,10 @@ _LOG_SCALE_EXPONENT: float = 0.3
 
 _DEFAULT_COLOR = "#CCCCCC"  # for bodies not in BODY_CONSTANTS
 
+# J2000.0 epoch in TDB Julian Date — anchor for the IAU rotation
+# model's W(t) = W₀ + W' × (Δd) where Δd = (t.tdb.jd - J2000_TDB_JD).
+_J2000_TDB_JD: float = 2451545.0
+
 # Display radius (in km) for bodies absent from BODY_CONSTANTS. Earth's
 # radius was the original fallback, but that's catastrophic at close-up
 # scales: a test particle 38,000 km from Earth gets rendered with the
@@ -157,6 +161,11 @@ class Viewer:
         self._bulk_polydata: pv.PolyData | None = None
         self._time_overlay_actor: object | None = None
         self._scaling_K: float = self._compute_auto_scaling_K()
+        # (n_samples, 3, 3) IAU rotation matrices per body that has
+        # rotation data. Built once in _build_time_axis (which already
+        # computes per-sample J2000-offset days for the slider). Empty
+        # for bodies without IAU data — they don't spin.
+        self._rotation_matrices: dict[str, np.ndarray] = {}
         self._build_time_axis()
         self._build_scene()
 
@@ -187,6 +196,16 @@ class Viewer:
         for name, actor in self._body_actors.items():
             pos = self._positions_au[name][sample_idx]
             actor.position = (float(pos[0]), float(pos[1]), float(pos[2]))
+            r_matrix = self._rotation_matrices.get(name)
+            if r_matrix is not None:
+                # vtkProp3D's transform stack is T(pos) * UserMatrix in
+                # post-multiply mode, so a rotation-only user matrix is
+                # applied first (mesh-frame → ICRF orientation) and the
+                # actor's position translates afterward — exactly what
+                # we want. No need to bake pos into the matrix.
+                m = np.eye(4)
+                m[:3, :3] = r_matrix[sample_idx]
+                actor.user_matrix = m
         for name, label_actor in self._label_actors.items():
             pos = self._positions_au[name][sample_idx]
             label_actor.SetPosition(float(pos[0]), float(pos[1]), float(pos[2]))
@@ -229,6 +248,11 @@ class Viewer:
         self._add_time_overlay()
         if self._n_samples > 1:
             self._add_time_slider()
+        # Apply sample-0 transforms (positions + IAU rotation matrices)
+        # uniformly through set_sample, so initial render isn't a
+        # special-cased path that diverges from scrubbed frames.
+        if self._n_samples > 0:
+            self.set_sample(0)
 
     def _build_time_axis(self) -> None:
         """Pre-compute per-sample time axis: seconds-from-epoch, the
@@ -259,6 +283,26 @@ class Viewer:
         self._abs_time_strs: list[str] = [
             f"T = {s} TDB" for s in np.atleast_1d(times.tdb.isot).tolist()
         ]
+        # Per-sample IAU rotation matrices for every body that has
+        # rotational elements registered. Pre-computed once so set_sample
+        # is just a dict lookup + matrix copy into the user-matrix slot.
+        days_past_j2000 = np.atleast_1d(times.tdb.jd - _J2000_TDB_JD).astype(np.float64)
+        for name in self._body_names:
+            try:
+                const = resolve_body_constant(name)
+            except UnknownBodyError:
+                continue
+            if (const.pole_ra_deg is None or const.pole_dec_deg is None
+                or const.prime_meridian_at_j2000_deg is None
+                or const.rotation_rate_deg_per_day is None):
+                continue
+            self._rotation_matrices[name] = _iau_rotation_matrices(
+                alpha0_deg=const.pole_ra_deg,
+                delta0_deg=const.pole_dec_deg,
+                w0_deg=const.prime_meridian_at_j2000_deg,
+                w_rate_deg_per_day=const.rotation_rate_deg_per_day,
+                days_past_j2000=days_past_j2000,
+            )
 
     def _add_time_overlay(self) -> None:
         """Top-left text actor showing the current sample's absolute
@@ -625,6 +669,58 @@ def _color_for(body_name: str) -> str:
         return resolve_body_constant(body_name).color_hex
     except UnknownBodyError:
         return _DEFAULT_COLOR
+
+
+def _iau_rotation_matrices(
+    *,
+    alpha0_deg: float,
+    delta0_deg: float,
+    w0_deg: float,
+    w_rate_deg_per_day: float,
+    days_past_j2000: np.ndarray,
+) -> np.ndarray:
+    """Per-sample 3×3 rotation matrices taking body-fixed vectors to ICRF.
+
+    IAU 2015 convention: ICRF→body = R_z(W) · R_x(90°−δ₀) · R_z(α₀+90°),
+    so body→ICRF is the transpose of that product. Body-fixed frame:
+    +Z = north pole, +X = prime meridian, +Y = 90° east. W(t) =
+    `w0_deg` + `w_rate_deg_per_day` × Δd; α₀, δ₀ are J2000 values used
+    as constants (sub-degree precession is invisible at viewer zoom).
+
+    Returns shape (n_samples, 3, 3) — pre-computed once per body and
+    stored on the viewer for cheap per-frame lookup.
+    """
+    n = days_past_j2000.shape[0]
+    a = np.deg2rad(alpha0_deg + 90.0)
+    d = np.deg2rad(90.0 - delta0_deg)
+    w_arr = np.deg2rad(w0_deg + w_rate_deg_per_day * days_past_j2000)
+
+    # R_z(α₀+90) and R_x(90-δ₀) are constant; build once.
+    rz_alpha = np.array([
+        [np.cos(a), -np.sin(a), 0.0],
+        [np.sin(a),  np.cos(a), 0.0],
+        [0.0,        0.0,       1.0],
+    ])
+    rx_delta = np.array([
+        [1.0, 0.0,        0.0       ],
+        [0.0, np.cos(d), -np.sin(d) ],
+        [0.0, np.sin(d),  np.cos(d) ],
+    ])
+    rx_rz = rx_delta @ rz_alpha  # constant part
+
+    # R_z(W) varies per sample. Build (n, 3, 3).
+    cos_w = np.cos(w_arr)
+    sin_w = np.sin(w_arr)
+    rz_w = np.zeros((n, 3, 3), dtype=np.float64)
+    rz_w[:, 0, 0] = cos_w
+    rz_w[:, 0, 1] = -sin_w
+    rz_w[:, 1, 0] = sin_w
+    rz_w[:, 1, 1] = cos_w
+    rz_w[:, 2, 2] = 1.0
+
+    # ICRF→body per sample, then transpose to body→ICRF.
+    icrf_to_body = np.einsum("nij,jk->nik", rz_w, rx_rz)
+    return np.transpose(icrf_to_body, (0, 2, 1))
 
 
 __all__ = ["Viewer", "Scaling"]
